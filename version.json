@@ -1,8 +1,8 @@
 {
-  "versionCode": 8,
-  "versionName": "1.5.2",
-  "url": "https://aka.doubaocdn.com/s/HCdmhMsB2h",
+  "versionCode": 10,
+  "versionName": "1.5.4",
+  "url": "https://aka.doubaocdn.com/s/6WjfuBVXH4",
   "site": "https://beshare.rth1.xyz",
-  "notes": "1.5.2：发送与接收传输开关独立；发送端支持四路优先级排序与失败自动兜底；新增超级快传，网络 + 蓝牙按带宽权重并行分片，默认关闭。",
+  "notes": "1.5.4：已加入过的热点再次发送时不再重复申请；接收端检测到同名文件会弹窗二次确认，可选择保留两个、覆盖或取消。",
   "published": "2026-11-14"
 }
