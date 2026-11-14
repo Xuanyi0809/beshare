@@ -92,9 +92,9 @@ public class MainActivity extends Activity {
     final Handler ui = new Handler(Looper.getMainLooper());
 
     // UI
-    LinearLayout root, listBox, fileRow, progressRow, scanRow;
+    LinearLayout root, listBox, fileRow, progressRow, scanRow, btnRow;
     boolean busy = false;
-    TextView chipSend, chipRecv, status, fileInfo, sendBtn, progText, localName;
+    TextView chipSend, chipRecv, status, fileInfo, sendBtn, recvBtn, progText, localName;
     ScrollView scroll;
     ProgressBar progBar;
     boolean dark = false;
@@ -274,7 +274,7 @@ public class MainActivity extends Activity {
         fileInfo.setPadding(dp(4), 0, dp(4), dp(10));
         bottom.addView(fileInfo);
 
-        LinearLayout btnRow = new LinearLayout(this);
+        btnRow = new LinearLayout(this);
         btnRow.setOrientation(LinearLayout.HORIZONTAL);
         TextView pick = text("选择文件", 14, cText, true);
         pick.setGravity(Gravity.CENTER);
@@ -300,6 +300,27 @@ public class MainActivity extends Activity {
         blp.topMargin = dp(10);
         sendBtn.setLayoutParams(blp);
         bottom.addView(sendBtn);
+
+        recvBtn = text("接收", 16, cOnPrimary, true);
+        recvBtn.setGravity(Gravity.CENTER);
+        recvBtn.setPadding(0, dp(14), 0, dp(14));
+        recvBtn.setBackground(round(cPrimary, 26, 0, 0));
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rlp.topMargin = dp(10);
+        recvBtn.setLayoutParams(rlp);
+        recvBtn.setVisibility(View.GONE);
+        recvBtn.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                if (serversRunning) {
+                    makeDiscoverable();
+                    createGroup();
+                    status.setText("接收中：让对方在「发送」里选中本机");
+                } else {
+                    startReceiver();
+                }
+            }
+        });
+        bottom.addView(recvBtn);
 
         fileRow = new LinearLayout(this);
         fileRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -341,8 +362,13 @@ public class MainActivity extends Activity {
         chipRecv.setTextColor(mode == 1 ? cOnPrimary : cText);
         fileRow.setVisibility(View.GONE);
         progressRowSet(false);
-        fileInfo.setVisibility(mode == 0 ? View.VISIBLE : View.GONE);
-        if (scanRow != null) scanRow.setVisibility(mode == 0 ? View.VISIBLE : View.GONE);
+        boolean send = mode == 0;
+        fileInfo.setVisibility(send ? View.VISIBLE : View.GONE);
+        btnRow.setVisibility(send ? View.VISIBLE : View.GONE);
+        sendBtn.setVisibility(send ? View.VISIBLE : View.GONE);
+        recvBtn.setVisibility(send ? View.GONE : View.VISIBLE);
+        if (!send) recvBtn.setText(serversRunning ? "重新准备接收" : "接收");
+        if (scanRow != null) scanRow.setVisibility(send ? View.VISIBLE : View.GONE);
     }
 
     void progressRowSet(boolean show) {
@@ -362,8 +388,8 @@ public class MainActivity extends Activity {
             startWfdDiscovery();
             renderDevices();
         } else {
-            status.setText("正在准备接收…");
-            startReceiver();
+            status.setText("点下方「接收」按钮开始等待对方");
+            recvBtn.setText("接收");
             renderReceiveHint();
         }
     }
@@ -515,7 +541,8 @@ public class MainActivity extends Activity {
         }
         makeDiscoverable();
         createGroup();
-        status.setText("等待对方连接：让对方在「发送」里选中本机");
+        recvBtn.setText("重新准备接收");
+        status.setText("接收中：让对方在「发送」里选中本机");
         renderReceiveHint();
     }
 
@@ -580,7 +607,7 @@ public class MainActivity extends Activity {
                 startTcpServer();
                 status.setText("直连已建立 · 本机 " + localIp + " · 等待文件");
             } else if (sendPending) {
-                connectAndSendTcp(localIp);
+                connectAndSendTcp(info);
             }
         }
     }
@@ -730,20 +757,30 @@ public class MainActivity extends Activity {
     String pendingType = "file";
     String pendingText = null;
 
-    void connectP2p(Dev dev) {
+    void connectP2p(final Dev dev) { connectP2p(dev, 0); }
+
+    void connectP2p(final Dev dev, final int attempt) {
         if (wfd == null || wch == null || dev.p2p == null) { sendPending = false; status.setText("Wi-Fi 直连不可用"); return; }
         try {
             WifiP2pConfig cfg = new WifiP2pConfig();
             cfg.deviceAddress = dev.addr;
             cfg.groupOwnerIntent = 0;
             wfd.connect(wch, cfg, new WifiP2pManager.ActionListener() {
-                public void onSuccess() {}
+                public void onSuccess() {
+                    // 连接回调可能早于 CONNECTION_CHANGED 广播，主动再查一次组信息
+                    ui.postDelayed(new Runnable() { public void run() { askConnectionInfo(); } }, 2500);
+                }
                 public void onFailure(int reason) {
-                    sendPending = false;
-                    ui.post(new Runnable() { public void run() {
-                        setBusy(false);
-                        status.setText("直连失败（对方未在接收页？），可选中蓝牙项重试");
-                    }});
+                    if (attempt < 2 && sendPending) {
+                        status.setText("直连正在重试（" + (attempt + 2) + "/3）…");
+                        ui.postDelayed(new Runnable() { public void run() { connectP2p(dev, attempt + 1); } }, 1800);
+                    } else {
+                        sendPending = false;
+                        ui.post(new Runnable() { public void run() {
+                            setBusy(false);
+                            status.setText("直连失败（对方未点「接收」？），可改选蓝牙项发送");
+                        }});
+                    }
                 }
             });
         } catch (Throwable t) {
@@ -751,20 +788,43 @@ public class MainActivity extends Activity {
         }
     }
 
-    void connectAndSendTcp(String ip) {
+    void askConnectionInfo() {
+        if (wfd == null || wch == null) return;
+        try {
+            wfd.requestConnectionInfo(wch, new WifiP2pManager.ConnectionInfoListener() {
+                public void onConnectionInfoAvailable(WifiP2pInfo info) { onP2pConnection(info); }
+            });
+        } catch (Throwable ignored) {}
+    }
+
+    void connectAndSendTcp(final WifiP2pInfo info) {
         if (!sendPending) return;
         sendPending = false;
+        final List<String> ips = new ArrayList<String>();
+        try {
+            if (info != null && info.groupOwnerAddress != null) {
+                String o = info.groupOwnerAddress.getHostAddress();
+                if (!TextUtils.isEmpty(o)) ips.add(o);
+            }
+        } catch (Throwable ignored) {}
+        if (!ips.contains("192.168.49.1")) ips.add("192.168.49.1");
+        if (!ips.contains("192.168.49.2")) ips.add("192.168.49.2");
         pool.execute(new Runnable() {
             public void run() {
-                Socket s = null;
-                try {
-                    s = new Socket();
-                    s.connect(new InetSocketAddress(ip, PORT), 8000);
-                    transfer(s, pendingType, pendingName, pendingSize, pendingText);
-                } catch (Throwable t) {
-                    final String msg = "直连传输失败：" + t.getClass().getSimpleName();
-                    ui.post(new Runnable() { public void run() { setBusy(false); status.setText(msg); }});
-                } finally { close(s); }
+                String last = "";
+                for (int i = 0; i < ips.size(); i++) {
+                    Socket s = null;
+                    try {
+                        s = new Socket();
+                        s.connect(new InetSocketAddress(ips.get(i), PORT), 7000);
+                        transfer(s, pendingType, pendingName, pendingSize, pendingText);
+                        return;
+                    } catch (Throwable t) {
+                        last = t.getClass().getSimpleName();
+                    } finally { close(s); }
+                }
+                final String msg = "直连传输失败：" + last;
+                ui.post(new Runnable() { public void run() { setBusy(false); status.setText(msg); }});
             }
         });
     }
@@ -826,6 +886,11 @@ public class MainActivity extends Activity {
             in.close();
         }
         out.flush();
+        if (!"text".equals(type)) {
+            // 等对端把缓冲区读完再关闭连接，避免蓝牙尾部数据被丢弃
+            try { Thread.sleep(350); } catch (Throwable ignored) {}
+            try { out.flush(); } catch (Throwable ignored) {}
+        }
         ui.post(new Runnable() { public void run() {
             setBusy(false);
             progressRowSet(false);
@@ -867,14 +932,22 @@ public class MainActivity extends Activity {
             }
             out.flush();
             out.close();
-            if (size > 0 && done < size) {
+            boolean ok = !(size > 0 && done < size);
+            try {
+                OutputStream ack = outOf(s);
+                ack.write(ok ? 'K' : 'E');
+                ack.flush();
+            } catch (Throwable ignored) {}
+            if (!ok) {
                 sink.discard();
                 ui.post(new Runnable() { public void run() { status.setText("接收中断 · " + name); }});
             } else {
                 final String path = sink.label;
+                final Uri gotUri = sink.uri;
+                final File gotFile = sink.file;
                 ui.post(new Runnable() { public void run() {
                     status.setText("接收完成 · " + name);
-                    addReceived(from, name, size, path, via);
+                    addReceived(from, name, size, path, via, gotUri, gotFile);
                     progressRowSet(false);
                 }});
             }
@@ -1076,10 +1149,10 @@ public class MainActivity extends Activity {
 
     void renderReceiveHint() {
         listBox.removeAllViews();
-        listBox.addView(hintCard("接收页已就绪。对方在「发送」里选中本机后，文件会直接落到 下载/快传。"));
+        listBox.addView(hintCard("点下方「接收」按钮开始等待。对方在「发送」里选中本机后，文件会直接落到 下载/快传。"));
     }
 
-    void addReceived(String from, String name, long size, String path, String via) {
+    void addReceived(String from, String name, long size, final String path, String via, final Uri uri, final File file) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(16), dp(14), dp(16), dp(14));
@@ -1094,6 +1167,29 @@ public class MainActivity extends Activity {
         TextView p = text(path, 11, cPrimary, false);
         p.setPadding(0, dp(6), 0, 0);
         card.addView(p);
+        TextView act = text(uri != null ? "打开文件" : "复制路径", 12, cPrimary, true);
+        act.setPadding(0, dp(8), 0, 0);
+        act.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                if (uri != null) {
+                    try {
+                        Intent i = new Intent(Intent.ACTION_VIEW);
+                        i.setDataAndType(uri, mimeOf(name));
+                        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(i);
+                    } catch (Throwable t) {
+                        Toast.makeText(MainActivity.this, "没有能打开它的应用，文件在 " + path, Toast.LENGTH_LONG).show();
+                    }
+                } else {
+                    try {
+                        ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                        cm.setPrimaryClip(ClipData.newPlainText("快传", file != null ? file.getAbsolutePath() : path));
+                        Toast.makeText(MainActivity.this, "路径已复制", Toast.LENGTH_SHORT).show();
+                    } catch (Throwable ignored) {}
+                }
+            }
+        });
+        card.addView(act);
         listBox.addView(card, 0);
         scroll.scrollTo(0, 0);
     }
