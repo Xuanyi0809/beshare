@@ -1,8 +1,10 @@
+
+Enter file contents here
 {
-  "versionCode": 11,
-  "versionName": "1.5.5",
-  "url": "https://aka.doubaocdn.com/s/UKnI2h6oVZ",
+  "versionCode": 12,
+  "versionName": "1.5.6",
+  "url": "https://aka.doubaocdn.com/s/LYPUIszdSI",
   "site": "https://beshare.rth1.xyz",
-  "notes": "1.5.5：更新检查改为多源并行，最快约 1 秒弹出；单源超时缩短到 3.5 秒，不再逐个等待。",
+  "notes": "1.5.6：首次启动可选择新手/高级模式；新手引导与通俗说明；新增自动优选（优先热点）和反馈入口；官网导航改为移动端列表。",
   "published": "2026-11-14"
 }
