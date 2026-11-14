@@ -6,10 +6,12 @@
 
 无服务器 · 无网页 · 无账号 · 无广告 · 纯本地直连
 
+[官网下载页](https://circlehub.rth1.xyz/beshare.html) · [GitHub Releases](https://github.com/Xuanyi0809/beshare/releases)
+
 ![platform](https://img.shields.io/badge/Platform-Android%206.0%2B-3DDC84?logo=android&logoColor=white)
 ![size](https://img.shields.io/badge/APK-33%20KB-4F7CFF)
 ![license](https://img.shields.io/badge/License-MIT-blue)
-![pkg](https://img.shields.io/badge/Package-com.rth1.beshare-lightgrey)
+![org](https://img.shields.io/badge/Org-CircleHub-4F7CFF)
 
 </div>
 
@@ -203,4 +205,4 @@ beshare/
 
 ## License
 
-[MIT](LICENSE) © 2026 rth1
+[MIT](LICENSE) © 2026 CircleHub
