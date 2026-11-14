@@ -245,6 +245,7 @@ public class MainActivity extends Activity {
                 Throwable last = null;
                 String[] urls = new String[]{
                         "https://beshare.rth1.xyz/version.json?t=" + System.currentTimeMillis(),
+                        "https://cdn.jsdelivr.net/gh/Xuanyi0809/beshare@main/version.json?t=" + System.currentTimeMillis(),
                         "https://raw.githubusercontent.com/Xuanyi0809/beshare/main/version.json?t=" + System.currentTimeMillis()
                 };
                 for (int i = 0; i < urls.length; i++) {
