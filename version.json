@@ -1,8 +1,8 @@
 {
-  "versionCode": 6,
-  "versionName": "1.5",
-  "url": "https://aka.doubaocdn.com/s/qB3UATmJEZ",
+  "versionCode": 7,
+  "versionName": "1.5.1",
+  "url": "https://aka.doubaocdn.com/s/Pq9zlxYxeN",
   "site": "https://beshare.rth1.xyz",
-  "notes": "1.5 大更新：设置页集中管理；Wi-Fi/蓝牙/P2P/热点四个独立开关；Wi-Fi Direct 建组与回调修复；大文件自动分块、多连接并行，支持 TCP+蓝牙同传。",
+  "notes": "1.5.1：MD3 界面与过渡动效优化；发送页新增「大文件自动分段」按钮，≥4 MB 自动点亮并启用，可手动关闭/开启；接收失败提示与操作状态优化。",
   "published": "2026-11-14"
 }

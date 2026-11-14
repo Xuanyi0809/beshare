@@ -16,12 +16,16 @@ import android.content.ContentValues;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
+import android.animation.ArgbEvaluator;
+import android.animation.ValueAnimator;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.net.ConnectivityManager;
 import android.net.LinkProperties;
 import android.net.Network;
@@ -41,12 +45,14 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.ParcelFileDescriptor;
 import android.provider.MediaStore;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.animation.DecelerateInterpolator;
 import android.view.Window;
 import android.view.WindowManager;
 import android.webkit.MimeTypeMap;
@@ -57,6 +63,7 @@ import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
+import android.graphics.Typeface;
 import android.widget.Toast;
 
 import org.json.JSONObject;
@@ -119,6 +126,9 @@ public class MainActivity extends Activity {
     boolean hotspotOn = false;
     boolean settingsOpen = false;
     boolean autoUpdate = true;
+    boolean autoChunk = true;
+    boolean chunkEnabled = false;
+    boolean chunkTouched = false;
     boolean updateChecking = false;
     WifiManager.LocalOnlyHotspotReservation hotRes;
     String hotSsid = "", hotPass = "";
@@ -129,9 +139,9 @@ public class MainActivity extends Activity {
     final Handler ui = new Handler(Looper.getMainLooper());
 
     // UI
-    LinearLayout root, listBox, fileRow, progressRow, scanRow, btnRow;
+    LinearLayout root, listBox, fileRow, progressRow, scanRow, btnRow, bottomBox, chunkRow;
     boolean busy = false;
-    TextView chipSend, chipRecv, chipP2P, status, fileInfo, sendBtn, recvBtn, progText, localName;
+    TextView chipSend, chipRecv, chipP2P, status, fileInfo, sendBtn, recvBtn, progText, localName, chunkTitle, chunkSub, chunkState;
     ScrollView scroll;
     ProgressBar progBar;
     boolean dark = false;
@@ -164,6 +174,7 @@ public class MainActivity extends Activity {
         p2pMode = sp.getBoolean("p2p", false);
         hotspotOn = sp.getBoolean("hotspot", false);
         autoUpdate = sp.getBoolean("autoUpdate", true);
+        autoChunk = sp.getBoolean("autoChunk", true);
 
         buildUi();
         initRadios();
@@ -190,8 +201,63 @@ public class MainActivity extends Activity {
         t.setText(s);
         t.setTextSize(size);
         t.setTextColor(color);
-        if (bold) t.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        t.setTypeface(Typeface.create(bold ? "sans-serif-medium" : "sans-serif", bold ? Typeface.BOLD : Typeface.NORMAL));
         return t;
+    }
+
+    Drawable ripple(int fill, int radius, int stroke, int strokeColor, int rippleColor) {
+        GradientDrawable g = round(fill, radius, stroke, strokeColor);
+        try {
+            return new RippleDrawable(ColorStateList.valueOf(rippleColor), g, null);
+        } catch (Throwable t) {
+            return g;
+        }
+    }
+
+    void elevate(View v, int dpValue) {
+        try { v.setElevation(dp(dpValue)); } catch (Throwable ignored) {}
+    }
+
+    void animateIn(final View v, final float fromY, final long delay) {
+        if (v == null) return;
+        v.setAlpha(0f);
+        v.setTranslationY(dp((int) fromY));
+        v.animate().alpha(1f).translationY(0f)
+                .setStartDelay(delay)
+                .setDuration(240)
+                .setInterpolator(new DecelerateInterpolator())
+                .start();
+    }
+
+    void animatePage(final View v, final float fromX) {
+        if (v == null) return;
+        v.setAlpha(0f);
+        v.setTranslationX(dp((int) fromX));
+        v.animate().alpha(1f).translationX(0f)
+                .setDuration(280)
+                .setInterpolator(new DecelerateInterpolator())
+                .start();
+    }
+
+    void pulse(View v) {
+        if (v == null) return;
+        v.animate().scaleX(0.96f).scaleY(0.96f).setDuration(90)
+                .withEndAction(new Runnable() { public void run() {
+                    v.animate().scaleX(1f).scaleY(1f).setDuration(130)
+                            .setInterpolator(new DecelerateInterpolator()).start();
+                }}).start();
+    }
+
+    void animateTint(final TextView v, int from, int to) {
+        if (v == null) return;
+        ValueAnimator a = ValueAnimator.ofObject(new ArgbEvaluator(), from, to);
+        a.setDuration(180);
+        a.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+            public void onAnimationUpdate(ValueAnimator an) {
+                try { v.setTextColor((Integer) an.getAnimatedValue()); } catch (Throwable ignored) {}
+            }
+        });
+        a.start();
     }
 
     void updateP2P() {
@@ -216,7 +282,7 @@ public class MainActivity extends Activity {
 
     String currentVersionName() {
         try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; }
-        catch (Throwable t) { return "1.5"; }
+        catch (Throwable t) { return "1.5.1"; }
     }
 
     String fetchText(String url) throws Exception {
@@ -341,12 +407,15 @@ public class MainActivity extends Activity {
 
     void openSettings() {
         settingsOpen = true;
-        setContentView(buildSettingsView());
+        View page = buildSettingsView();
+        setContentView(page);
+        animatePage(page, 22);
     }
 
     void closeSettings() {
         settingsOpen = false;
         setContentView(root);
+        animatePage(root, -22);
     }
 
     LinearLayout settingsCard() {
@@ -356,6 +425,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.bottomMargin = dp(10);
         c.setLayoutParams(lp);
+        elevate(c, 1);
         return c;
     }
 
@@ -364,6 +434,7 @@ public class MainActivity extends Activity {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(16), dp(14), dp(12), dp(14));
+        row.setBackground(ripple(Color.TRANSPARENT, 22, 0, 0, dark ? 0x33FFFFFF : 0x1A2563EB));
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
@@ -372,11 +443,18 @@ public class MainActivity extends Activity {
         d.setPadding(0, dp(4), dp(10), 0);
         col.addView(d);
         row.addView(col);
-        Switch sw = new Switch(this);
+        final Switch sw = new Switch(this);
         sw.setChecked(checked);
         sw.setThumbTintList(ColorStateList.valueOf(cPrimary));
+        try {
+            int[][] states = new int[][]{{android.R.attr.state_checked}, {}};
+            sw.setTrackTintList(new ColorStateList(states, new int[]{0x662563EB, dark ? 0x33FFFFFF : 0x1F000000}));
+        } catch (Throwable ignored) {}
         sw.setOnCheckedChangeListener(l);
         row.addView(sw);
+        row.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { sw.toggle(); }
+        });
         return row;
     }
 
@@ -385,6 +463,7 @@ public class MainActivity extends Activity {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(16), dp(14), dp(16), dp(14));
+        row.setBackground(ripple(Color.TRANSPARENT, 22, 0, 0, dark ? 0x33FFFFFF : 0x1A2563EB));
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
@@ -448,12 +527,12 @@ public class MainActivity extends Activity {
         TextView back = text("返回", 12, cPrimary, true);
         back.setGravity(Gravity.CENTER);
         back.setPadding(dp(12), dp(8), dp(12), dp(8));
-        back.setBackground(round(cPrimarySoft, 18, 0, 0));
+        back.setBackground(ripple(cPrimarySoft, 20, 0, 0, dark ? 0x33FFFFFF : 0x332563EB));
         back.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) { closeSettings(); }
         });
         head.addView(back);
-        TextView title = text("设置", 26, cText, true);
+        TextView title = text("设置", 24, cText, true);
         title.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         title.setPadding(dp(14), 0, 0, 0);
         head.addView(title);
@@ -467,7 +546,8 @@ public class MainActivity extends Activity {
         sc.addView(box, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         page.addView(sc, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
 
-        TextView sec1 = text("传输开关", 12, cSub, true);
+        TextView sec1 = text("传输开关", 11, cSub, true);
+        sec1.setLetterSpacing(0.08f);
         sec1.setPadding(dp(4), dp(10), 0, dp(8));
         box.addView(sec1);
         LinearLayout card1 = settingsCard();
@@ -489,7 +569,12 @@ public class MainActivity extends Activity {
                 }));
         box.addView(card1);
 
-        TextView sec2 = text("关于与更新", 12, cSub, true);
+        TextView chunkNote = text("大文件自动分段：发送页选择文件后自动检测，≥4 MB 点亮「大文件自动分段」，可随时手动关闭或开启。", 11, cSub, false);
+        chunkNote.setPadding(dp(6), dp(6), dp(6), dp(2));
+        box.addView(chunkNote);
+
+        TextView sec2 = text("关于与更新", 11, cSub, true);
+        sec2.setLetterSpacing(0.08f);
         sec2.setPadding(dp(4), dp(10), 0, dp(8));
         box.addView(sec2);
         LinearLayout card2 = settingsCard();
@@ -500,18 +585,21 @@ public class MainActivity extends Activity {
                         try { getSharedPreferences("beshare", 0).edit().putBoolean("autoUpdate", v).apply(); } catch (Throwable ignored) {}
                     }
                 }));
-        card2.addView(actionRow("检查更新", "当前 v1.5 · 手动检查一次", new View.OnClickListener() {
+        card2.addView(actionRow("检查更新", "当前 v1.5.1 · 手动检查一次", new View.OnClickListener() {
             public void onClick(View v) { checkUpdate(true); }
         }));
         card2.addView(actionRow("官网 / 更新", "打开 beshare.rth1.xyz，获取最新版本", new View.OnClickListener() {
             public void onClick(View v) { openSite(); }
         }));
-        card2.addView(actionRow("关于快传", "v1.5 · CircleHub · 无服务器 · 无网页 · 文件只在两台设备间直传", new View.OnClickListener() {
+        card2.addView(actionRow("关于快传", "v1.5.1 · CircleHub · 无服务器 · 无网页 · 文件只在两台设备间直传", new View.OnClickListener() {
             public void onClick(View v) {
-                Toast.makeText(MainActivity.this, "快传 1.5 · 多线路 P2P 传输", Toast.LENGTH_SHORT).show();
+                Toast.makeText(MainActivity.this, "快传 1.5.1 · 多线路 P2P 传输", Toast.LENGTH_SHORT).show();
             }
         }));
         box.addView(card2);
+
+        animateIn(card1, 10, 70);
+        animateIn(card2, 10, 120);
 
         TextView note = text("提示：热点与 Wi‑Fi 直连共用无线网卡，接收端优先按热点开关决定；至少保留蓝牙或 Wi‑Fi 之一才能发现设备。", 11, cSub, false);
         note.setPadding(dp(6), dp(6), dp(6), 0);
@@ -528,23 +616,24 @@ public class MainActivity extends Activity {
         // 顶部
         LinearLayout head = new LinearLayout(this);
         head.setOrientation(LinearLayout.VERTICAL);
-        head.setPadding(dp(20), dp(18), dp(20), dp(6));
+        head.setPadding(dp(20), dp(20), dp(20), dp(4));
         LinearLayout titleRow = new LinearLayout(this);
         titleRow.setOrientation(LinearLayout.HORIZONTAL);
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = text("快传", 27, cText, true);
+        TextView title = text("快传", 22, cText, true);
+        title.setLetterSpacing(0.01f);
         title.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        TextView settings = text("设置", 12, cPrimary, true);
+        TextView settings = text("设置", 13, cPrimary, true);
         settings.setGravity(Gravity.CENTER);
-        settings.setPadding(dp(14), dp(8), dp(14), dp(8));
-        settings.setBackground(round(cPrimarySoft, 18, 0, 0));
+        settings.setPadding(dp(15), dp(9), dp(15), dp(9));
+        settings.setBackground(ripple(cPrimarySoft, 20, 0, 0, dark ? 0x33FFFFFF : 0x332563EB));
         settings.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) { openSettings(); }
+            public void onClick(View v) { pulse(v); openSettings(); }
         });
         titleRow.addView(title);
         titleRow.addView(settings);
         head.addView(titleRow);
-        TextView sub = text("v1.5 · 多线路传输 · 无服务器 · 不经过网页", 12, cSub, false);
+        TextView sub = text("v1.5.1 · 多线路传输 · 无服务器 · 不经过网页", 12, cSub, false);
         sub.setPadding(0, dp(4), 0, 0);
         head.addView(sub);
         root.addView(head);
@@ -552,16 +641,21 @@ public class MainActivity extends Activity {
         // Tab
         LinearLayout tabs = new LinearLayout(this);
         tabs.setOrientation(LinearLayout.HORIZONTAL);
-        tabs.setPadding(dp(16), dp(10), dp(16), dp(4));
+        tabs.setPadding(dp(4), dp(4), dp(4), dp(4));
+        tabs.setBackground(round(cCard, 28, 1, cLine));
+        elevate(tabs, 1);
+        LinearLayout.LayoutParams tabsLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        tabsLp.leftMargin = dp(16); tabsLp.rightMargin = dp(16); tabsLp.topMargin = dp(10);
+        tabs.setLayoutParams(tabsLp);
         chipSend = text("发送", 15, cOnPrimary, true);
         chipSend.setGravity(Gravity.CENTER);
-        chipSend.setPadding(0, dp(11), 0, dp(11));
+        chipSend.setPadding(0, dp(10), 0, dp(10));
         LinearLayout.LayoutParams lp1 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
         lp1.rightMargin = dp(10);
         chipSend.setLayoutParams(lp1);
         chipRecv = text("接收", 15, cText, true);
         chipRecv.setGravity(Gravity.CENTER);
-        chipRecv.setPadding(0, dp(11), 0, dp(11));
+        chipRecv.setPadding(0, dp(10), 0, dp(10));
         chipRecv.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         tabs.addView(chipSend);
         tabs.addView(chipRecv);
@@ -576,7 +670,7 @@ public class MainActivity extends Activity {
         // 状态卡
         status = text("准备中…", 13, cText, false);
         status.setPadding(dp(16), dp(13), dp(16), dp(13));
-        status.setBackground(round(cPrimarySoft, 18, 0, 0));
+        status.setBackground(ripple(cPrimarySoft, 20, 0, 0, dark ? 0x33FFFFFF : 0x1A2563EB));
         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         slp.leftMargin = dp(16); slp.rightMargin = dp(16); slp.topMargin = dp(8);
         status.setLayoutParams(slp);
@@ -631,24 +725,62 @@ public class MainActivity extends Activity {
         LinearLayout bottom = new LinearLayout(this);
         bottom.setOrientation(LinearLayout.VERTICAL);
         bottom.setPadding(dp(16), dp(8), dp(16), dp(18));
+        bottomBox = bottom;
 
         fileInfo = text("未选择文件", 13, cSub, false);
         fileInfo.setPadding(dp(4), 0, dp(4), dp(10));
         bottom.addView(fileInfo);
+
+        chunkRow = new LinearLayout(this);
+        chunkRow.setOrientation(LinearLayout.HORIZONTAL);
+        chunkRow.setGravity(Gravity.CENTER_VERTICAL);
+        chunkRow.setPadding(dp(14), dp(12), dp(12), dp(12));
+        chunkRow.setBackground(ripple(cCard, 22, 1, cLine, 0x1A2563EB));
+        LinearLayout.LayoutParams crlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        crlp.bottomMargin = dp(10);
+        chunkRow.setLayoutParams(crlp);
+        LinearLayout chunkCol = new LinearLayout(this);
+        chunkCol.setOrientation(LinearLayout.VERTICAL);
+        chunkCol.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        chunkTitle = text("大文件自动分段", 14, cText, true);
+        chunkCol.addView(chunkTitle);
+        chunkSub = text("≥4 MB 自动检测并启用，可手动开关", 11, cSub, false);
+        chunkSub.setPadding(0, dp(3), 0, 0);
+        chunkCol.addView(chunkSub);
+        chunkRow.addView(chunkCol);
+        chunkState = text("待选择", 11, cPrimary, true);
+        chunkState.setGravity(Gravity.CENTER);
+        chunkState.setPadding(dp(12), dp(6), dp(12), dp(6));
+        chunkRow.addView(chunkState);
+        chunkRow.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                if (busy) return;
+                if (sendUri == null && !chunkEnabled) {
+                    Toast.makeText(MainActivity.this, "先选择一个文件，再调整分段开关", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                chunkTouched = true;
+                chunkEnabled = !chunkEnabled;
+                refreshChunkControl();
+                pulse(v);
+                status.setText(chunkEnabled ? "大文件分段已开启，发送时将按可用线路并行" : "大文件分段已关闭，将使用单条线路发送");
+            }
+        });
+        bottom.addView(chunkRow);
 
         btnRow = new LinearLayout(this);
         btnRow.setOrientation(LinearLayout.HORIZONTAL);
         TextView pick = text("选择文件", 14, cText, true);
         pick.setGravity(Gravity.CENTER);
         pick.setPadding(0, dp(12), 0, dp(12));
-        pick.setBackground(round(cCard, 24, 1, cLine));
+        pick.setBackground(ripple(cCard, 24, 1, cLine, dark ? 0x33FFFFFF : 0x1A2563EB));
         LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
         plp.rightMargin = dp(10);
         pick.setLayoutParams(plp);
         TextView txt = text("发送文本", 14, cText, true);
         txt.setGravity(Gravity.CENTER);
         txt.setPadding(0, dp(12), 0, dp(12));
-        txt.setBackground(round(cCard, 24, 1, cLine));
+        txt.setBackground(ripple(cCard, 24, 1, cLine, dark ? 0x33FFFFFF : 0x1A2563EB));
         txt.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         btnRow.addView(pick);
         btnRow.addView(txt);
@@ -657,7 +789,7 @@ public class MainActivity extends Activity {
         sendBtn = text("发送", 16, cOnPrimary, true);
         sendBtn.setGravity(Gravity.CENTER);
         sendBtn.setPadding(0, dp(14), 0, dp(14));
-        sendBtn.setBackground(round(cPrimary, 26, 0, 0));
+        sendBtn.setBackground(ripple(cPrimary, 26, 0, 0, 0x33FFFFFF));
         LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         blp.topMargin = dp(10);
         sendBtn.setLayoutParams(blp);
@@ -666,7 +798,7 @@ public class MainActivity extends Activity {
         recvBtn = text("接收", 16, cOnPrimary, true);
         recvBtn.setGravity(Gravity.CENTER);
         recvBtn.setPadding(0, dp(14), 0, dp(14));
-        recvBtn.setBackground(round(cPrimary, 26, 0, 0));
+        recvBtn.setBackground(ripple(cPrimary, 26, 0, 0, 0x33FFFFFF));
         LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         rlp.topMargin = dp(10);
         recvBtn.setLayoutParams(rlp);
@@ -705,6 +837,10 @@ public class MainActivity extends Activity {
         root.addView(bottom);
         setContentView(root);
 
+        animateIn(head, 8, 0);
+        animateIn(tabs, 10, 40);
+        animateIn(status, 10, 80);
+
         pick.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) { pickFile(); }
         });
@@ -715,13 +851,64 @@ public class MainActivity extends Activity {
             public void onClick(View v) { doSend(); }
         });
 
+        refreshChunkControl();
         switchMode(0);
     }
 
+    void refreshChunkControl() {
+        if (chunkRow == null || chunkState == null) return;
+        boolean hasFile = sendUri != null;
+        boolean large = hasFile && sendSize >= MULTI_MIN;
+        if (!hasFile) {
+            chunkTitle.setText("大文件自动分段");
+            chunkSub.setText("≥4 MB 自动检测并启用，可手动开关");
+            chunkState.setText("待选择");
+            chunkState.setTextColor(cSub);
+            chunkState.setBackground(round(Color.TRANSPARENT, 18, 1, cLine));
+            chunkTitle.setTextColor(cText);
+            chunkRow.setBackground(ripple(cCard, 22, 1, cLine, dark ? 0x33FFFFFF : 0x1A2563EB));
+            return;
+        }
+        chunkTitle.setText("大文件自动分段");
+        if (chunkEnabled) {
+            chunkSub.setText(large ? "已检测为大文件 · 多线路并行发送" : "已手动开启 · 发送时按线路分块");
+            chunkState.setText(large ? "已开启" : "手动开");
+            chunkState.setTextColor(cOnPrimary);
+            chunkState.setBackground(round(cPrimary, 18, 0, 0));
+            chunkTitle.setTextColor(cPrimary);
+            chunkRow.setBackground(ripple(cPrimarySoft, 22, 1, cPrimary, dark ? 0x33FFFFFF : 0x1A2563EB));
+        } else {
+            chunkSub.setText(large ? "检测为大文件 · 当前已手动关闭" : "普通文件 · 单线路发送");
+            chunkState.setText(large ? "已关闭" : "单线路");
+            chunkState.setTextColor(cSub);
+            chunkState.setBackground(round(Color.TRANSPARENT, 18, 1, cLine));
+            chunkTitle.setTextColor(cText);
+            chunkRow.setBackground(ripple(cCard, 22, 1, cLine, dark ? 0x33FFFFFF : 0x1A2563EB));
+        }
+    }
+
+
+    void applyAutoChunkForFile() {
+        boolean large = sendSize >= MULTI_MIN;
+        chunkTouched = false;
+        chunkEnabled = large && autoChunk;
+        refreshChunkControl();
+        if (large) {
+            status.setText("检测到大文件 " + human(sendSize) + " · 已自动开启分段");
+            if (chunkEnabled) pulse(chunkRow);
+        } else {
+            status.setText("文件已选择 · 小于 4 MB，使用单线路发送");
+        }
+    }
+
     void applyChips() {
-        chipSend.setBackground(round(mode == 0 ? cPrimary : cCard, 24, mode == 0 ? 0 : 1, cLine));
+        chipSend.setBackground(mode == 0
+                ? ripple(cPrimary, 24, 0, 0, 0x33FFFFFF)
+                : ripple(Color.TRANSPARENT, 24, 0, 0, dark ? 0x26FFFFFF : 0x142563EB));
         chipSend.setTextColor(mode == 0 ? cOnPrimary : cText);
-        chipRecv.setBackground(round(mode == 1 ? cPrimary : cCard, 24, mode == 1 ? 0 : 1, cLine));
+        chipRecv.setBackground(mode == 1
+                ? ripple(cPrimary, 24, 0, 0, 0x33FFFFFF)
+                : ripple(Color.TRANSPARENT, 24, 0, 0, dark ? 0x26FFFFFF : 0x142563EB));
         chipRecv.setTextColor(mode == 1 ? cOnPrimary : cText);
         fileRow.setVisibility(View.GONE);
         progressRowSet(false);
@@ -732,6 +919,8 @@ public class MainActivity extends Activity {
         recvBtn.setVisibility(send ? View.GONE : View.VISIBLE);
         if (!send) recvBtn.setText(serversRunning ? "重新准备接收" : "接收");
         if (scanRow != null) scanRow.setVisibility(send ? View.VISIBLE : View.GONE);
+        if (chunkRow != null) chunkRow.setVisibility(send ? View.VISIBLE : View.GONE);
+        if (bottomBox != null) animateIn(bottomBox, 10, 20);
     }
 
     void progressRowSet(boolean show) {
@@ -740,8 +929,10 @@ public class MainActivity extends Activity {
 
     void switchMode(int m) {
         if (m == mode && serversRunning && m == 1) return;
+        boolean changed = m != mode;
         mode = m;
         applyChips();
+        if (changed) pulse(m == 0 ? chipSend : chipRecv);
         devices.clear();
         target = null;
         listBox.removeAllViews();
@@ -1095,6 +1286,7 @@ public class MainActivity extends Activity {
             sendName = queryName(sendUri);
             sendSize = querySize(sendUri);
             fileInfo.setText(sendName + " · " + human(sendSize));
+            applyAutoChunkForFile();
         }
     }
 
@@ -1117,10 +1309,23 @@ public class MainActivity extends Activity {
             android.database.Cursor c = getContentResolver().query(u, null, null, null, null);
             if (c != null) {
                 int idx = c.getColumnIndex(android.provider.OpenableColumns.SIZE);
-                if (c.moveToFirst() && idx >= 0) { long v = c.getLong(idx); c.close(); return v; }
-                c.close();
+                if (c.moveToFirst() && idx >= 0) {
+                    long v = c.getLong(idx);
+                    c.close();
+                    if (v > 0) return v;
+                } else {
+                    c.close();
+                }
             }
         } catch (Throwable ignored) {}
+        ParcelFileDescriptor pfd = null;
+        try {
+            pfd = getContentResolver().openFileDescriptor(u, "r");
+            if (pfd != null) return pfd.getStatSize();
+        } catch (Throwable ignored) {
+        } finally {
+            try { if (pfd != null) pfd.close(); } catch (Throwable ignored) {}
+        }
         return 0;
     }
 
@@ -1154,6 +1359,14 @@ public class MainActivity extends Activity {
         busy = b;
         sendBtn.setEnabled(!b);
         sendBtn.setAlpha(b ? 0.55f : 1f);
+        if (chunkRow != null) chunkRow.setAlpha(b ? 0.6f : 1f);
+        if (btnRow != null) {
+            for (int i = 0; i < btnRow.getChildCount(); i++) {
+                View c = btnRow.getChildAt(i);
+                c.setEnabled(!b);
+                c.setAlpha(b ? 0.55f : 1f);
+            }
+        }
     }
 
     void sendPayload(Dev dev, String name, long size, String type, String text) {
@@ -1262,7 +1475,7 @@ public class MainActivity extends Activity {
         } catch (Throwable ignored) {}
         if (!ips.contains("192.168.49.1")) ips.add("192.168.49.1");
         if (!ips.contains("192.168.49.2")) ips.add("192.168.49.2");
-        if (pendingSize >= MULTI_MIN && "file".equals(pendingType)) {
+        if (chunkEnabled && "file".equals(pendingType)) {
             startChunkedIps(ips, pendingDev != null && pendingDev.bt != null && btOn && pendingSize >= 8L * 1024 * 1024);
         } else {
             connectOverTcp(ips);
@@ -1312,7 +1525,7 @@ public class MainActivity extends Activity {
         final AtomicInteger remaining = new AtomicInteger(n);
         final AtomicBoolean failed = new AtomicBoolean(false);
         ui.post(new Runnable() { public void run() {
-            status.setText("多线路发送 · 自动分 " + n + " 段");
+            status.setText(n > 1 ? ("多线路发送 · 自动分 " + n + " 段") : "分段发送 · 单线路");
         }});
         for (int i = 0; i < n; i++) {
             final int idx = i;
@@ -1474,7 +1687,7 @@ public class MainActivity extends Activity {
                             List<String> ips = new ArrayList<String>();
                             ips.add(gw);
                             if (!ips.contains("192.168.43.1")) ips.add("192.168.43.1");
-                            if (pendingSize >= MULTI_MIN && "file".equals(pendingType)) {
+                            if (chunkEnabled && "file".equals(pendingType)) {
                                 startChunkedIps(ips, pendingDev != null && pendingDev.bt != null && btOn && pendingSize >= 8L * 1024 * 1024);
                             } else {
                                 connectOverTcp(ips);
@@ -1508,7 +1721,7 @@ public class MainActivity extends Activity {
             ui.postDelayed(new Runnable() { public void run() {
                 List<String> ips = new ArrayList<String>();
                 ips.add("192.168.43.1");
-                if (pendingSize >= MULTI_MIN && "file".equals(pendingType)) {
+                if (chunkEnabled && "file".equals(pendingType)) {
                     startChunkedIps(ips, pendingDev != null && pendingDev.bt != null && btOn && pendingSize >= 8L * 1024 * 1024);
                 } else {
                     connectOverTcp(ips);
@@ -1924,11 +2137,17 @@ public class MainActivity extends Activity {
     void renderDevices() {
         listBox.removeAllViews();
         if (devices.isEmpty()) {
-            listBox.addView(hintCard("正在搜索… 让对方打开「接收」，并保持屏幕亮着"));
+            View hint = hintCard("正在搜索… 让对方打开「接收」，并保持屏幕亮着");
+            listBox.addView(hint);
+            animateIn(hint, 8, 0);
             return;
         }
+        int i = 0;
         for (final Dev d : devices) {
-            listBox.addView(deviceRow(d));
+            View row = deviceRow(d);
+            listBox.addView(row);
+            animateIn(row, 10, i * 35);
+            i++;
         }
     }
 
@@ -1937,7 +2156,8 @@ public class MainActivity extends Activity {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(14), dp(12), dp(14), dp(12));
-        row.setBackground(round(d == target ? cPrimarySoft : cCard, 22, 1, d == target ? cPrimary : cLine));
+        row.setBackground(ripple(d == target ? cPrimarySoft : cCard, 22, 1, d == target ? cPrimary : cLine, dark ? 0x33FFFFFF : 0x1A2563EB));
+        elevate(row, d == target ? 2 : 0);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.bottomMargin = dp(8);
         row.setLayoutParams(lp);
@@ -1969,7 +2189,12 @@ public class MainActivity extends Activity {
         row.addView(dot);
 
         row.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) { target = d; renderDevices(); status.setText("已选择：" + d.name); }
+            public void onClick(View v) {
+                target = d;
+                pulse(v);
+                renderDevices();
+                status.setText("已选择：" + d.name);
+            }
         });
         return row;
     }
@@ -1977,20 +2202,24 @@ public class MainActivity extends Activity {
     View hintCard(String s) {
         TextView t = text(s, 13, cSub, false);
         t.setPadding(dp(16), dp(16), dp(16), dp(16));
-        t.setBackground(round(cCard, 22, 1, cLine));
+        t.setBackground(ripple(cCard, 22, 1, cLine, dark ? 0x33FFFFFF : 0x1A2563EB));
+        elevate(t, 1);
         return t;
     }
 
     void renderReceiveHint() {
         listBox.removeAllViews();
-        listBox.addView(hintCard("点下方「接收」按钮开始等待。对方在「发送」里选中本机后，文件会直接落到 下载/快传。"));
+        View hint = hintCard("点下方「接收」按钮开始等待。对方在「发送」里选中本机后，文件会直接落到 下载/快传。");
+        listBox.addView(hint);
+        animateIn(hint, 8, 0);
     }
 
     void addReceived(String from, String name, long size, final String path, String via, final Uri uri, final File file) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(16), dp(14), dp(16), dp(14));
-        card.setBackground(round(cCard, 22, 1, cLine));
+        card.setBackground(ripple(cCard, 22, 1, cLine, dark ? 0x33FFFFFF : 0x1A2563EB));
+        elevate(card, 1);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.bottomMargin = dp(8);
         card.setLayoutParams(lp);
