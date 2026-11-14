@@ -10,7 +10,7 @@
 
 ![platform](https://img.shields.io/badge/Platform-Android%206.0%2B-3DDC84?logo=android&logoColor=white)
 ![version](https://img.shields.io/badge/Version-1.5-2563EB)
-![size](https://img.shields.io/badge/APK-45%20KB-2563EB)
+![size](https://img.shields.io/badge/APK-49%20KB-2563EB)
 ![license](https://img.shields.io/badge/License-MIT-blue)
 ![org](https://img.shields.io/badge/Org-CircleHub-2563EB)
 
@@ -38,8 +38,9 @@
 - **全类型文件**：系统文件选择器（SAF）选任意文件，不申请存储权限也能发
 - **文字消息**：直接发送文本，接收端可一键复制
 - **MD3 设计**：Material 3 配色与形态（大圆角卡片、分区设置页、胶囊标签、状态卡），跟随系统深色模式
+- **更新检查**：启动自动读取 `version.json`，设置页可手动检查；站点不可达时自动走 jsDelivr / GitHub raw 备线
 - **落盘可见**：Android 10+ 写入 `下载/快传`（MediaStore），旧版本写入公共下载目录；保留原文件名，同名自动加序号
-- **零依赖**：不依赖 AndroidX / Material Components，纯 framework Java，APK 仅 45 KB
+- **零依赖**：不依赖 AndroidX / Material Components，纯 framework Java，APK 仅 49 KB
 - **无后台服务**：不需要常驻通知、不需要登录，退出即结束
 
 ## 界面与交互
