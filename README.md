@@ -9,7 +9,7 @@
 [官网下载页](https://beshare.rth1.xyz) · [GitHub Releases](https://github.com/Xuanyi0809/beshare/releases)
 
 ![platform](https://img.shields.io/badge/Platform-Android%206.0%2B-3DDC84?logo=android&logoColor=white)
-![version](https://img.shields.io/badge/Version-1.3-4F7CFF)
+![version](https://img.shields.io/badge/Version-1.4-4F7CFF)
 ![size](https://img.shields.io/badge/APK-33%20KB-4F7CFF)
 ![license](https://img.shields.io/badge/License-MIT-blue)
 ![org](https://img.shields.io/badge/Org-CircleHub-4F7CFF)
