@@ -120,13 +120,19 @@ public class MainActivity extends Activity {
     String sendName = "";
     long sendSize = 0;
     boolean sendPending = false;
-    boolean p2pMode = false;
-    boolean wifiOn = true;
-    boolean btOn = true;
-    boolean hotspotOn = false;
+    boolean wifiSend = true;
+    boolean btSend = true;
+    boolean p2pSend = true;
+    boolean hotspotSend = true;
+    boolean wifiRecv = true;
+    boolean btRecv = true;
+    boolean p2pRecv = true;
+    boolean hotspotRecv = true;
+    String[] sendOrder = new String[]{"wifi", "p2p", "hotspot", "bt"};
     boolean settingsOpen = false;
     boolean autoUpdate = true;
     boolean autoChunk = true;
+    boolean superSend = false;
     boolean chunkEnabled = false;
     boolean chunkTouched = false;
     boolean updateChecking = false;
@@ -141,6 +147,7 @@ public class MainActivity extends Activity {
     // UI
     LinearLayout root, listBox, fileRow, progressRow, scanRow, btnRow, bottomBox, chunkRow;
     boolean busy = false;
+    int settingsScrollY = 0;
     TextView chipSend, chipRecv, chipP2P, status, fileInfo, sendBtn, recvBtn, progText, localName, chunkTitle, chunkSub, chunkState;
     ScrollView scroll;
     ProgressBar progBar;
@@ -169,12 +176,18 @@ public class MainActivity extends Activity {
         }
 
         SharedPreferences sp = getSharedPreferences("beshare", 0);
-        wifiOn = sp.getBoolean("wifi", true);
-        btOn = sp.getBoolean("bt", true);
-        p2pMode = sp.getBoolean("p2p", false);
-        hotspotOn = sp.getBoolean("hotspot", false);
+        wifiSend = sp.getBoolean("wifiSend", true);
+        btSend = sp.getBoolean("btSend", true);
+        p2pSend = sp.getBoolean("p2pSend", true);
+        hotspotSend = sp.getBoolean("hotspotSend", true);
+        wifiRecv = sp.getBoolean("wifiRecv", true);
+        btRecv = sp.getBoolean("btRecv", true);
+        p2pRecv = sp.getBoolean("p2pRecv", true);
+        hotspotRecv = sp.getBoolean("hotspotRecv", true);
+        sendOrder = parseOrder(sp.getString("sendOrder", "wifi,p2p,hotspot,bt"));
         autoUpdate = sp.getBoolean("autoUpdate", true);
         autoChunk = sp.getBoolean("autoChunk", true);
+        superSend = sp.getBoolean("superSend", false);
 
         buildUi();
         initRadios();
@@ -260,11 +273,65 @@ public class MainActivity extends Activity {
         a.start();
     }
 
+    String[] parseOrder(String raw) {
+        String[] def = new String[]{"wifi", "p2p", "hotspot", "bt"};
+        ArrayList<String> got = new ArrayList<String>();
+        try {
+            String[] parts = raw == null ? new String[0] : raw.split(",");
+            for (String p : parts) {
+                String k = p.trim();
+                if (("wifi".equals(k) || "p2p".equals(k) || "hotspot".equals(k) || "bt".equals(k))
+                        && !got.contains(k)) got.add(k);
+            }
+        } catch (Throwable ignored) {}
+        for (String k : def) if (!got.contains(k)) got.add(k);
+        return got.toArray(new String[got.size()]);
+    }
+
+    String orderString() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < sendOrder.length; i++) {
+            if (i > 0) sb.append(',');
+            sb.append(sendOrder[i]);
+        }
+        return sb.toString();
+    }
+
+    String routeName(String k) {
+        if ("wifi".equals(k)) return "Wi‑Fi 直连";
+        if ("p2p".equals(k)) return "P2P 握手";
+        if ("hotspot".equals(k)) return "应用内热点";
+        return "蓝牙";
+    }
+
+    String routeDesc(String k) {
+        if ("wifi".equals(k)) return "Wi‑Fi Direct 直连，高速 TCP";
+        if ("p2p".equals(k)) return "蓝牙握手后切到网络通道";
+        if ("hotspot".equals(k)) return "加入对方临时热点传输";
+        return "蓝牙数据通道，低速兜底";
+    }
+
+    boolean sendEnabled(String k) {
+        if ("wifi".equals(k)) return wifiSend;
+        if ("p2p".equals(k)) return p2pSend;
+        if ("hotspot".equals(k)) return hotspotSend;
+        return btSend;
+    }
+
+    void setSendEnabled(String k, boolean v) {
+        if ("wifi".equals(k)) wifiSend = v;
+        else if ("p2p".equals(k)) p2pSend = v;
+        else if ("hotspot".equals(k)) hotspotSend = v;
+        else btSend = v;
+    }
+
+    boolean btSearchNeeded() { return btSend || p2pSend || hotspotSend; }
+
     void updateP2P() {
         if (chipP2P == null) return;
-        chipP2P.setText(p2pMode ? "P2P 开" : "P2P");
-        chipP2P.setTextColor(p2pMode ? cOnPrimary : cSub);
-        chipP2P.setBackground(round(p2pMode ? cPrimary : cCard, 18, p2pMode ? 0 : 1, cLine));
+        chipP2P.setText(p2pSend ? "P2P 开" : "P2P");
+        chipP2P.setTextColor(p2pSend ? cOnPrimary : cSub);
+        chipP2P.setBackground(round(p2pSend ? cPrimary : cCard, 18, p2pSend ? 0 : 1, cLine));
     }
 
     void openUrl(String url) {
@@ -282,7 +349,7 @@ public class MainActivity extends Activity {
 
     String currentVersionName() {
         try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; }
-        catch (Throwable t) { return "1.5.1"; }
+        catch (Throwable t) { return "1.5.2"; }
     }
 
     String fetchText(String url) throws Exception {
@@ -407,6 +474,7 @@ public class MainActivity extends Activity {
     }
 
     void openSettings() {
+        if (!settingsOpen) settingsScrollY = 0;
         settingsOpen = true;
         View page = buildSettingsView();
         setContentView(page);
@@ -459,6 +527,73 @@ public class MainActivity extends Activity {
         return row;
     }
 
+    LinearLayout priorityRow(final String key, final int index, final ScrollView sc) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(14), dp(12), dp(10), dp(12));
+        row.setBackground(ripple(Color.TRANSPARENT, 22, 0, 0, dark ? 0x33FFFFFF : 0x1A2563EB));
+
+        TextView num = text("#" + (index + 1), 12, index == 0 ? cOnPrimary : cSub, true);
+        num.setGravity(Gravity.CENTER);
+        num.setPadding(dp(6), dp(4), dp(6), dp(4));
+        num.setBackground(round(index == 0 ? cPrimary : cPrimarySoft, 13, index == 0 ? 0 : 1, cLine));
+        row.addView(num);
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+        clp.leftMargin = dp(12);
+        col.setLayoutParams(clp);
+        col.addView(text(routeName(key), 15, cText, true));
+        TextView d = text(routeDesc(key), 11, cSub, false);
+        d.setPadding(0, dp(3), dp(8), 0);
+        col.addView(d);
+        row.addView(col);
+
+        TextView up = text("↑", 16, index > 0 ? cPrimary : cSub, true);
+        up.setGravity(Gravity.CENTER);
+        up.setAlpha(index > 0 ? 1f : 0.25f);
+        up.setPadding(dp(8), dp(4), dp(8), dp(4));
+        TextView down = text("↓", 16, index < sendOrder.length - 1 ? cPrimary : cSub, true);
+        down.setGravity(Gravity.CENTER);
+        down.setAlpha(index < sendOrder.length - 1 ? 1f : 0.25f);
+        down.setPadding(dp(8), dp(4), dp(8), dp(4));
+        up.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                if (index == 0) return;
+                settingsScrollY = sc.getScrollY();
+                moveRoute(key, -1);
+            }
+        });
+        down.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                if (index == sendOrder.length - 1) return;
+                settingsScrollY = sc.getScrollY();
+                moveRoute(key, 1);
+            }
+        });
+        row.addView(up);
+        row.addView(down);
+
+        final Switch sw = new Switch(this);
+        sw.setChecked(sendEnabled(key));
+        sw.setThumbTintList(ColorStateList.valueOf(cPrimary));
+        try {
+            int[][] states = new int[][]{{android.R.attr.state_checked}, {}};
+            sw.setTrackTintList(new ColorStateList(states, new int[]{0x662563EB, dark ? 0x33FFFFFF : 0x1F000000}));
+        } catch (Throwable ignored) {}
+        sw.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            public void onCheckedChanged(CompoundButton b, boolean v) { setSendEnabled(key, v); onToggleChanged(); }
+        });
+        row.addView(sw);
+        row.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { sw.toggle(); }
+        });
+        return row;
+    }
+
+
     LinearLayout actionRow(String title, String desc, View.OnClickListener l) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -489,30 +624,49 @@ public class MainActivity extends Activity {
         groupReady = false;
     }
 
-    void onToggleChanged() {
+    void saveTransportPrefs() {
         try {
             getSharedPreferences("beshare", 0).edit()
-                    .putBoolean("wifi", wifiOn)
-                    .putBoolean("bt", btOn)
-                    .putBoolean("p2p", p2pMode)
-                    .putBoolean("hotspot", hotspotOn)
+                    .putBoolean("wifiSend", wifiSend)
+                    .putBoolean("btSend", btSend)
+                    .putBoolean("p2pSend", p2pSend)
+                    .putBoolean("hotspotSend", hotspotSend)
+                    .putBoolean("wifiRecv", wifiRecv)
+                    .putBoolean("btRecv", btRecv)
+                    .putBoolean("p2pRecv", p2pRecv)
+                    .putBoolean("hotspotRecv", hotspotRecv)
+                    .putString("sendOrder", orderString())
                     .apply();
         } catch (Throwable ignored) {}
+    }
+
+    void onToggleChanged() {
+        saveTransportPrefs();
         if (mode == 1) {
-            stopHotspot();
-            if (!wifiOn) stopWfdGroup();
-            startReceiver();
+            restartReceiver();
         } else {
             devices.clear();
             target = null;
             renderDevices();
-            if (btOn) startBtDiscovery();
-            if (wifiOn) startWfdDiscovery();
-            status.setText("开关已更新：Wi‑Fi 直连 " + (wifiOn ? "开" : "关")
-                    + " · 蓝牙 " + (btOn ? "开" : "关")
-                    + " · P2P " + (p2pMode ? "开" : "关")
-                    + " · 热点 " + (hotspotOn ? "开" : "关"));
+            if (btSearchNeeded()) startBtDiscovery();
+            if (wifiSend) startWfdDiscovery();
+            status.setText("发送设置已更新 · 优先 " + routeName(sendOrder[0])
+                    + " · 兜底 " + routeName(sendOrder[3]));
         }
+    }
+
+    void moveRoute(String key, int dir) {
+        int at = -1;
+        for (int i = 0; i < sendOrder.length; i++) if (sendOrder[i].equals(key)) at = i;
+        int to = at + dir;
+        if (at < 0 || to < 0 || to >= sendOrder.length) return;
+        String t = sendOrder[at];
+        sendOrder[at] = sendOrder[to];
+        sendOrder[to] = t;
+        saveTransportPrefs();
+        settingsScrollY = Math.max(0, settingsScrollY);
+        openSettings();
+        Toast.makeText(this, "发送优先级已更新", Toast.LENGTH_SHORT).show();
     }
 
     LinearLayout buildSettingsView() {
@@ -547,31 +701,64 @@ public class MainActivity extends Activity {
         sc.addView(box, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         page.addView(sc, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
 
-        TextView sec1 = text("传输开关", 11, cSub, true);
+        TextView sec1 = text("发送传输", 11, cSub, true);
         sec1.setLetterSpacing(0.08f);
         sec1.setPadding(dp(4), dp(10), 0, dp(8));
         box.addView(sec1);
         LinearLayout card1 = settingsCard();
-        card1.addView(switchRow("Wi‑Fi 直连", "Wi‑Fi Direct 发现并直连对方，负责高速 TCP 传输", wifiOn,
-                new CompoundButton.OnCheckedChangeListener() {
-                    public void onCheckedChanged(CompoundButton b, boolean v) { wifiOn = v; onToggleChanged(); }
-                }));
-        card1.addView(switchRow("蓝牙", "发现附近设备、完成握手，并可兜底传文件", btOn,
-                new CompoundButton.OnCheckedChangeListener() {
-                    public void onCheckedChanged(CompoundButton b, boolean v) { btOn = v; onToggleChanged(); }
-                }));
-        card1.addView(switchRow("P2P 握手", "选中蓝牙设备后先握手，再切到热点或 Wi‑Fi 直连", p2pMode,
-                new CompoundButton.OnCheckedChangeListener() {
-                    public void onCheckedChanged(CompoundButton b, boolean v) { p2pMode = v; onToggleChanged(); }
-                }));
-        card1.addView(switchRow("应用内热点", "接收端创建临时热点，发送端自动加入后传输", hotspotOn,
-                new CompoundButton.OnCheckedChangeListener() {
-                    public void onCheckedChanged(CompoundButton b, boolean v) { hotspotOn = v; onToggleChanged(); }
-                }));
+        for (int i = 0; i < sendOrder.length; i++) {
+            card1.addView(priorityRow(sendOrder[i], i, sc));
+        }
         box.addView(card1);
 
+        TextView orderNote = text("按 #1 → #4 顺序选路：#1 最优先，#4 兜底。前面的线路失败会自动尝试下一个；关闭开关只是禁用该方式，不影响排序。", 11, cSub, false);
+        orderNote.setPadding(dp(6), dp(2), dp(6), dp(8));
+        box.addView(orderNote);
+
+        LinearLayout cardSuper = settingsCard();
+        cardSuper.addView(switchRow("超级快传", "网络与蓝牙并行，按通道带宽权重分配分片；默认关闭，开启后仅大文件生效", superSend,
+                new CompoundButton.OnCheckedChangeListener() {
+                    public void onCheckedChanged(CompoundButton b, boolean v) {
+                        superSend = v;
+                        try { getSharedPreferences("beshare", 0).edit().putBoolean("superSend", v).apply(); } catch (Throwable ignored) {}
+                        if (sendUri != null) applyAutoChunkForFile();
+                        Toast.makeText(MainActivity.this, v ? "超级快传已开启：网络 + 蓝牙并行" : "超级快传已关闭", Toast.LENGTH_SHORT).show();
+                    }
+                }));
+        box.addView(cardSuper);
+        TextView superNote = text("超级快传会同时使用 TCP 多连接与蓝牙通道，并按带宽比例分配字节。Wi‑Fi 直连、P2P、热点共用同一块无线网卡，因此合并为网络通道，不重复占用；蓝牙作为独立通道并行。", 11, cSub, false);
+        superNote.setPadding(dp(6), dp(2), dp(6), dp(8));
+        box.addView(superNote);
+
+        TextView secRecv = text("接收传输", 11, cSub, true);
+        secRecv.setLetterSpacing(0.08f);
+        secRecv.setPadding(dp(4), dp(8), 0, dp(8));
+        box.addView(secRecv);
+        LinearLayout cardRecv = settingsCard();
+        cardRecv.addView(switchRow("Wi‑Fi 直连", "创建 Wi‑Fi Direct 组，接收 TCP 文件；关闭后不接受直连", wifiRecv,
+                new CompoundButton.OnCheckedChangeListener() {
+                    public void onCheckedChanged(CompoundButton b, boolean v) { wifiRecv = v; onToggleChanged(); }
+                }));
+        cardRecv.addView(switchRow("P2P 握手", "允许对方蓝牙握手后切到网络通道接收", p2pRecv,
+                new CompoundButton.OnCheckedChangeListener() {
+                    public void onCheckedChanged(CompoundButton b, boolean v) { p2pRecv = v; onToggleChanged(); }
+                }));
+        cardRecv.addView(switchRow("应用内热点", "本机创建临时热点，供对方加入后接收", hotspotRecv,
+                new CompoundButton.OnCheckedChangeListener() {
+                    public void onCheckedChanged(CompoundButton b, boolean v) { hotspotRecv = v; onToggleChanged(); }
+                }));
+        cardRecv.addView(switchRow("蓝牙", "接受蓝牙数据通道发来的文件与文本", btRecv,
+                new CompoundButton.OnCheckedChangeListener() {
+                    public void onCheckedChanged(CompoundButton b, boolean v) { btRecv = v; onToggleChanged(); }
+                }));
+        box.addView(cardRecv);
+
+        TextView recvNote = text("接收端不设优先级，只决定允许哪些方式接入；四项默认全部开启。P2P/热点握手需要蓝牙搜索与服务，但不等于允许蓝牙传文件。", 11, cSub, false);
+        recvNote.setPadding(dp(6), dp(2), dp(6), dp(8));
+        box.addView(recvNote);
+
         TextView chunkNote = text("大文件自动分段：发送页选择文件后自动检测，≥4 MB 点亮「大文件自动分段」，可随时手动关闭或开启。", 11, cSub, false);
-        chunkNote.setPadding(dp(6), dp(6), dp(6), dp(2));
+        chunkNote.setPadding(dp(6), dp(4), dp(6), dp(2));
         box.addView(chunkNote);
 
         TextView sec2 = text("关于与更新", 11, cSub, true);
@@ -586,25 +773,29 @@ public class MainActivity extends Activity {
                         try { getSharedPreferences("beshare", 0).edit().putBoolean("autoUpdate", v).apply(); } catch (Throwable ignored) {}
                     }
                 }));
-        card2.addView(actionRow("检查更新", "当前 v1.5.1 · 手动检查一次", new View.OnClickListener() {
+        card2.addView(actionRow("检查更新", "当前 v1.5.2 · 手动检查一次", new View.OnClickListener() {
             public void onClick(View v) { checkUpdate(true); }
         }));
         card2.addView(actionRow("官网 / 更新", "打开 beshare.rth1.xyz，获取最新版本", new View.OnClickListener() {
             public void onClick(View v) { openSite(); }
         }));
-        card2.addView(actionRow("关于快传", "v1.5.1 · CircleHub · 无服务器 · 无网页 · 文件只在两台设备间直传", new View.OnClickListener() {
+        card2.addView(actionRow("关于快传", "v1.5.2 · CircleHub · 无服务器 · 无网页 · 文件只在两台设备间直传", new View.OnClickListener() {
             public void onClick(View v) {
-                Toast.makeText(MainActivity.this, "快传 1.5.1 · 多线路 P2P 传输", Toast.LENGTH_SHORT).show();
+                Toast.makeText(MainActivity.this, "快传 1.5.2 · 发送/接收独立开关 + 超级快传", Toast.LENGTH_SHORT).show();
             }
         }));
         box.addView(card2);
 
         animateIn(card1, 10, 70);
-        animateIn(card2, 10, 120);
+        animateIn(cardSuper, 10, 90);
+        animateIn(cardRecv, 10, 105);
+        animateIn(card2, 10, 130);
 
-        TextView note = text("提示：热点与 Wi‑Fi 直连共用无线网卡，接收端优先按热点开关决定；至少保留蓝牙或 Wi‑Fi 之一才能发现设备。", 11, cSub, false);
+        TextView note = text("提示：热点与 Wi‑Fi 直连共用无线网卡；发送与接收开关互不影响，接收端只决定允许哪些方式接入。", 11, cSub, false);
         note.setPadding(dp(6), dp(6), dp(6), 0);
         box.addView(note);
+        final ScrollView scf = sc;
+        sc.post(new Runnable() { public void run() { scf.scrollTo(0, settingsScrollY); } });
         return page;
     }
 
@@ -634,7 +825,7 @@ public class MainActivity extends Activity {
         titleRow.addView(title);
         titleRow.addView(settings);
         head.addView(titleRow);
-        TextView sub = text("v1.5.1 · 多线路传输 · 无服务器 · 不经过网页", 12, cSub, false);
+        TextView sub = text("v1.5.2 · 独立开关 · 优先级选路 · 超级快传 · 无服务器 · 不经过网页", 12, cSub, false);
         sub.setPadding(0, dp(4), 0, 0);
         head.addView(sub);
         root.addView(head);
@@ -680,7 +871,7 @@ public class MainActivity extends Activity {
                 if (mode == 0) {
                     devices.clear(); target = null; renderDevices();
                     status.setText("重新搜索中…");
-                    if (btOn) startBtDiscovery(); if (wifiOn) startWfdDiscovery();
+                    if (btSearchNeeded()) startBtDiscovery(); if (wifiSend) startWfdDiscovery();
                 }
             }
         });
@@ -703,7 +894,7 @@ public class MainActivity extends Activity {
                 if (mode != 0) return;
                 devices.clear(); target = null; renderDevices();
                 status.setText("重新搜索中…");
-                if (btOn) startBtDiscovery(); if (wifiOn) startWfdDiscovery();
+                if (btSearchNeeded()) startBtDiscovery(); if (wifiSend) startWfdDiscovery();
             }
         });
         scanRow.addView(scanHint);
@@ -807,9 +998,9 @@ public class MainActivity extends Activity {
         recvBtn.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 if (serversRunning) {
-                    if (btOn) makeDiscoverable();
-                    if (hotspotOn) startHotspot();
-                    else if (wifiOn) createGroup();
+                    if (btRecv || p2pRecv || hotspotRecv) makeDiscoverable();
+                    if (hotspotRecv) startHotspot();
+                    else if (wifiRecv) createGroup();
                     status.setText("接收中：让对方在「发送」里选中本机");
                 } else {
                     startReceiver();
@@ -872,8 +1063,10 @@ public class MainActivity extends Activity {
         }
         chunkTitle.setText("大文件自动分段");
         if (chunkEnabled) {
-            chunkSub.setText(large ? "已检测为大文件 · 多线路并行发送" : "已手动开启 · 发送时按线路分块");
-            chunkState.setText(large ? "已开启" : "手动开");
+            boolean sup = superSend && large;
+            chunkSub.setText(large ? (sup ? "超级快传 · 网络 + 蓝牙并行，按带宽分片" : "已检测为大文件 · 多线路并行发送")
+                    : "已手动开启 · 发送时按线路分块");
+            chunkState.setText(large ? (sup ? "超级" : "已开启") : "手动开");
             chunkState.setTextColor(cOnPrimary);
             chunkState.setBackground(round(cPrimary, 18, 0, 0));
             chunkTitle.setTextColor(cPrimary);
@@ -892,10 +1085,11 @@ public class MainActivity extends Activity {
     void applyAutoChunkForFile() {
         boolean large = sendSize >= MULTI_MIN;
         chunkTouched = false;
-        chunkEnabled = large && autoChunk;
+        chunkEnabled = large && (autoChunk || superSend);
         refreshChunkControl();
         if (large) {
-            status.setText("检测到大文件 " + human(sendSize) + " · 已自动开启分段");
+            status.setText(superSend ? "检测到大文件 " + human(sendSize) + " · 超级快传已就绪"
+                    : "检测到大文件 " + human(sendSize) + " · 已自动开启分段");
             if (chunkEnabled) pulse(chunkRow);
         } else {
             status.setText("文件已选择 · 小于 4 MB，使用单线路发送");
@@ -941,8 +1135,8 @@ public class MainActivity extends Activity {
             stopHotspot();
             stopWfdGroup();
             status.setText("正在搜索附近的设备…");
-            if (btOn) startBtDiscovery();
-            if (wifiOn) startWfdDiscovery();
+            if (btSearchNeeded()) startBtDiscovery();
+            if (wifiSend) startWfdDiscovery();
             renderDevices();
         } else {
             status.setText("点下方「接收」按钮开始等待对方");
@@ -1006,7 +1200,7 @@ public class MainActivity extends Activity {
             status.setText("权限未全部授予：蓝牙/定位/附近设备权限会影响搜索与直连");
             Toast.makeText(this, "请在设置中允许蓝牙与附近设备权限", Toast.LENGTH_LONG).show();
         }
-        if (mode == 0) { if (btOn) startBtDiscovery(); if (wifiOn) startWfdDiscovery(); }
+        if (mode == 0) { if (btSearchNeeded()) startBtDiscovery(); if (wifiSend) startWfdDiscovery(); }
     }
 
     /* ---------------- 广播 ---------------- */
@@ -1103,7 +1297,7 @@ public class MainActivity extends Activity {
         }
         try {
             WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-            if (wm == null) { createGroup(); return; }
+            if (wm == null) { if (wifiRecv) createGroup(); return; }
             status.setText("正在创建 P2P 热点…");
             wm.startLocalOnlyHotspot(new WifiManager.LocalOnlyHotspotCallback() {
                 public void onStarted(WifiManager.LocalOnlyHotspotReservation r) {
@@ -1124,13 +1318,13 @@ public class MainActivity extends Activity {
                 public void onFailed(int reason) {
                     hotRes = null;
                     ui.post(new Runnable() { public void run() {
-                        status.setText("热点创建失败（" + reason + "），改用 Wi-Fi 直连");
-                        createGroup();
+                        status.setText(wifiRecv ? "热点创建失败（" + reason + "），改用 Wi-Fi 直连" : "热点创建失败（" + reason + "）");
+                        if (wifiRecv) createGroup();
                     }});
                 }
             }, ui);
         } catch (Throwable t) {
-            createGroup();
+            if (wifiRecv) createGroup();
         }
     }
 
@@ -1140,24 +1334,60 @@ public class MainActivity extends Activity {
     }
 
     void startReceiver() {
-        if (!btOn && !wifiOn && !hotspotOn) {
-            status.setText("请先在设置里打开 Wi-Fi、蓝牙或热点中的至少一项");
+        if (!btRecv && !wifiRecv && !hotspotRecv && !p2pRecv) {
+            status.setText("接收传输全部关闭：请在设置里至少打开一项");
             return;
         }
+        boolean needBt = btRecv || p2pRecv || hotspotRecv;
+        boolean needTcp = wifiRecv || hotspotRecv;
         if (!serversRunning) {
-            startBtServer();
-            startTcpServer();
+            if (needBt) startBtServer();
+            if (needTcp) startTcpServer();
             serversRunning = true;
         }
-        if (btOn) makeDiscoverable();
-        if (hotspotOn) {
+        if (needBt) makeDiscoverable();
+        if (hotspotRecv) {
             startHotspot();
-        } else if (wifiOn) {
+        } else if (wifiRecv) {
             createGroup();
         }
         recvBtn.setText("重新准备接收");
-        status.setText("接收中：让对方在「发送」里选中本机");
+        status.setText("接收中：允许 " + recvSummary() + " · 让对方在「发送」里选中本机");
         renderReceiveHint();
+    }
+
+    String recvSummary() {
+        ArrayList<String> a = new ArrayList<String>();
+        if (wifiRecv) a.add("Wi‑Fi");
+        if (p2pRecv) a.add("P2P");
+        if (hotspotRecv) a.add("热点");
+        if (btRecv) a.add("蓝牙");
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < a.size(); i++) {
+            if (i > 0) sb.append(" / ");
+            sb.append(a.get(i));
+        }
+        return sb.length() == 0 ? "无" : sb.toString();
+    }
+
+    void stopBtServer() {
+        try { if (btServer != null) btServer.close(); } catch (Throwable ignored) {}
+        btServer = null;
+    }
+
+    void stopTcpServer() {
+        try { if (tcpServer != null) tcpServer.close(); } catch (Throwable ignored) {}
+        tcpServer = null;
+        tcpRunning = false;
+    }
+
+    void restartReceiver() {
+        stopBtServer();
+        stopTcpServer();
+        stopHotspot();
+        stopWfdGroup();
+        serversRunning = false;
+        startReceiver();
     }
 
     void makeDiscoverable() {
@@ -1370,29 +1600,77 @@ public class MainActivity extends Activity {
         }
     }
 
+    List<String> buildSendPlan(Dev dev) {
+        ArrayList<String> out = new ArrayList<String>();
+        for (String k : sendOrder) {
+            if ("wifi".equals(k) && wifiSend && dev != null && dev.p2p != null) out.add(k);
+            else if ("p2p".equals(k) && p2pSend && dev != null && dev.bt != null) out.add(k);
+            else if ("hotspot".equals(k) && hotspotSend && dev != null && dev.bt != null) out.add(k);
+            else if ("bt".equals(k) && btSend && dev != null && dev.bt != null) out.add(k);
+        }
+        return out;
+    }
+
     void sendPayload(Dev dev, String name, long size, String type, String text) {
         if (busy) { Toast.makeText(this, "正在传输，请稍候", Toast.LENGTH_SHORT).show(); return; }
+        sendPlan.clear();
+        sendPlan.addAll(buildSendPlan(dev));
+        if (sendPlan.isEmpty()) {
+            Toast.makeText(this, "这台设备的可用发送方式都被关闭了，请到设置里打开至少一项", Toast.LENGTH_LONG).show();
+            status.setText("没有可用发送线路：" + dev.name);
+            return;
+        }
         setBusy(true);
         sendPending = true;
         sendToken++;
-        final long tok = sendToken;
         pendingName = name; pendingSize = size; pendingType = type; pendingText = text; pendingDev = dev;
-        status.setText("正在连接 " + dev.name + "…");
-        if (dev.kind == 0) {
-            connectP2p(dev);
-            ui.postDelayed(new Runnable() {
-                public void run() {
-                    if (sendPending && tok == sendToken) {
-                        sendPending = false;
-                        setBusy(false);
-                        status.setText("直连超时，可改用蓝牙发送");
-                    }
-                }
-            }, 20000);
-        } else if (p2pMode && dev.bt != null) {
-            connectAndHandshakeBt(dev, name, size, type, text);
+        sendPlanIndex = 0;
+        startSendRoute(0);
+    }
+
+    void startSendRoute(final int index) {
+        if (index >= sendPlan.size()) {
+            sendPending = false;
+            setBusy(false);
+            status.setText("所有发送线路都失败了，可检查对方接收开关后重试");
+            return;
+        }
+        sendPlanIndex = index;
+        routeDataStarted = false;
+        final long rt = ++routeToken;
+        String route = sendPlan.get(index);
+        int rank = 1;
+        for (int i = 0; i < sendOrder.length; i++) if (sendOrder[i].equals(route)) rank = i + 1;
+        status.setText("按优先级 #" + rank + " · " + routeName(route) + " 发送…");
+        if ("wifi".equals(route)) {
+            connectP2p(pendingDev, 0, rt);
+        } else if ("p2p".equals(route)) {
+            connectAndHandshakeBt(pendingDev, pendingName, pendingSize, pendingType, pendingText, "wfd", rt);
+        } else if ("hotspot".equals(route)) {
+            connectAndHandshakeBt(pendingDev, pendingName, pendingSize, pendingType, pendingText, "hotspot", rt);
         } else {
-            connectAndSendBt(dev, name, size, type, text);
+            connectAndSendBt(pendingDev, pendingName, pendingSize, pendingType, pendingText, rt);
+        }
+    }
+
+    void routeFailed(final long rt, final String msg) {
+        if (rt != routeToken) return;
+        if (routeDataStarted) {
+            sendPending = false;
+            setBusy(false);
+            status.setText(msg);
+            return;
+        }
+        if (sendPlanIndex + 1 < sendPlan.size()) {
+            final int nextIndex = sendPlanIndex + 1;
+            final String next = sendPlan.get(nextIndex);
+            status.setText(routeName(sendPlan.get(sendPlanIndex)) + " 未成功，自动回退到 " + routeName(next) + "…");
+            sendPending = true;
+            ui.postDelayed(new Runnable() { public void run() { startSendRoute(nextIndex); } }, 600);
+        } else {
+            sendPending = false;
+            setBusy(false);
+            status.setText(msg + " · 已无更多兜底线路");
         }
     }
 
@@ -1402,36 +1680,42 @@ public class MainActivity extends Activity {
     Dev pendingDev;
     static final long MULTI_MIN = 4L * 1024 * 1024;
 
+    final List<String> sendPlan = new ArrayList<String>();
+    int sendPlanIndex = 0;
+    long routeToken = 0;
+    boolean routeDataStarted = false;
+
     final Map<String, ChunkJob> chunkJobs = new HashMap<String, ChunkJob>();
     final Object chunkLock = new Object();
     String pendingText = null;
 
-    void connectP2p(final Dev dev) { connectP2p(dev, 0); }
+    long p2pRouteToken = 0;
 
-    void connectP2p(final Dev dev, final int attempt) {
-        if (wfd == null || wch == null || dev.p2p == null) { sendPending = false; status.setText("Wi-Fi 直连不可用"); return; }
+    void connectP2p(final Dev dev, final int attempt, final long rt) {
+        if (rt != routeToken) return;
+        if (wfd == null || wch == null || dev.p2p == null) { routeFailed(rt, "Wi-Fi 直连不可用"); return; }
         try {
             WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
             if (wm != null && !wm.isWifiEnabled()) {
-                sendPending = false; setBusy(false);
-                status.setText("Wi-Fi 未开启：请打开 Wi-Fi，或改选蓝牙设备发送");
+                routeFailed(rt, "Wi-Fi 未开启，无法使用直连");
                 return;
             }
         } catch (Throwable ignored) {}
+        p2pRouteToken = rt;
         try {
             WifiP2pConfig cfg = new WifiP2pConfig();
             cfg.deviceAddress = dev.addr;
             cfg.groupOwnerIntent = 0;
             wfd.connect(wch, cfg, new WifiP2pManager.ActionListener() {
                 public void onSuccess() {
-                    // 部分 ROM 不发 CONNECTION_CHANGED，主动轮询组信息
                     for (int i = 0; i < 3; i++) {
                         ui.postDelayed(new Runnable() { public void run() {
-                            if (sendPending) askConnectionInfo();
+                            if (sendPending && rt == routeToken) askConnectionInfo();
                         }}, 2200 + i * 2600);
                     }
                 }
                 public void onFailure(int reason) {
+                    if (rt != routeToken) return;
                     if (attempt < 2 && sendPending) {
                         status.setText("直连正在重试（" + (attempt + 2) + "/3）…");
                         try {
@@ -1440,18 +1724,17 @@ public class MainActivity extends Activity {
                                 public void onFailure(int r) {}
                             });
                         } catch (Throwable ignored) {}
-                        ui.postDelayed(new Runnable() { public void run() { connectP2p(dev, attempt + 1); } }, 2200);
+                        ui.postDelayed(new Runnable() { public void run() { connectP2p(dev, attempt + 1, rt); } }, 2200);
                     } else {
-                        sendPending = false;
-                        ui.post(new Runnable() { public void run() {
-                            setBusy(false);
-                            status.setText("直连失败（对方未点「接收」？），可改选蓝牙项发送");
-                        }});
+                        routeFailed(rt, "直连失败（对方未点「接收」？）");
                     }
                 }
             });
+            ui.postDelayed(new Runnable() { public void run() {
+                if (sendPending && rt == routeToken) routeFailed(rt, "直连超时");
+            }}, 20000);
         } catch (Throwable t) {
-            sendPending = false;
+            routeFailed(rt, "直连失败：" + t.getClass().getSimpleName());
         }
     }
 
@@ -1459,7 +1742,10 @@ public class MainActivity extends Activity {
         if (wfd == null || wch == null) return;
         try {
             wfd.requestConnectionInfo(wch, new WifiP2pManager.ConnectionInfoListener() {
-                public void onConnectionInfoAvailable(WifiP2pInfo info) { onP2pConnection(info); }
+                public void onConnectionInfoAvailable(WifiP2pInfo info) {
+                    if (mode == 0 && p2pRouteToken != 0 && p2pRouteToken != routeToken) return;
+                    onP2pConnection(info);
+                }
             });
         } catch (Throwable ignored) {}
     }
@@ -1476,11 +1762,142 @@ public class MainActivity extends Activity {
         } catch (Throwable ignored) {}
         if (!ips.contains("192.168.49.1")) ips.add("192.168.49.1");
         if (!ips.contains("192.168.49.2")) ips.add("192.168.49.2");
-        if (chunkEnabled && "file".equals(pendingType)) {
-            startChunkedIps(ips, pendingDev != null && pendingDev.bt != null && btOn && pendingSize >= 8L * 1024 * 1024);
+        final long rt = routeToken;
+        if (superSend && chunkEnabled && "file".equals(pendingType) && pendingSize >= MULTI_MIN) {
+            startSuperSend(ips, currentNetWeight());
+        } else if (chunkEnabled && "file".equals(pendingType)) {
+            routeDataStarted = true;
+            startChunkedIps(ips, pendingDev != null && pendingDev.bt != null && btSend && pendingSize >= 8L * 1024 * 1024);
         } else {
-            connectOverTcp(ips);
+            connectOverTcp(ips, rt);
         }
+    }
+
+    int currentNetWeight() {
+        try {
+            String route = sendPlan.get(sendPlanIndex);
+            if ("wifi".equals(route)) return 40;
+            if ("p2p".equals(route)) return 25;
+            if ("hotspot".equals(route)) return 15;
+        } catch (Throwable ignored) {}
+        return 30;
+    }
+
+    static class SuperSeg {
+        final long start, len;
+        final int index, total;
+        final boolean bt;
+        int tries = 0;
+        SuperSeg(long start, long len, int index, int total, boolean bt) {
+            this.start = start; this.len = len; this.index = index; this.total = total; this.bt = bt;
+        }
+    }
+
+    void startSuperSend(final List<String> ips, final int netWeight) {
+        routeDataStarted = true;
+        final String name = pendingName, type = pendingType;
+        final long size = pendingSize;
+        final Dev dev = pendingDev;
+        final String id = System.currentTimeMillis() + "-super-" + sendToken;
+        final AtomicLong done = new AtomicLong(0);
+        final AtomicBoolean failed = new AtomicBoolean(false);
+        final boolean btAvail = btSend && dev != null && dev.bt != null && size >= 2L * 1024 * 1024;
+        int total = size >= 64L * 1024 * 1024 ? 8 : (size >= 16L * 1024 * 1024 ? 6 : 4);
+        int btSegs = btAvail ? 1 : 0;
+        int netSegs = Math.max(1, total - btSegs);
+        long btBytes = 0;
+        if (btAvail) {
+            btBytes = (long) (size * 2.5 / (2.5 + Math.max(1, netWeight)));
+            if (btBytes < 512L * 1024) btBytes = Math.min(size / 2, 512L * 1024);
+            if (btBytes >= size) btBytes = size / 3;
+        }
+        long netBytes = size - btBytes;
+        final List<SuperSeg> segs = new ArrayList<SuperSeg>();
+        for (int i = 0; i < netSegs; i++) {
+            long st = netBytes * i / netSegs;
+            long ln = netBytes * (i + 1) / netSegs - st;
+            segs.add(new SuperSeg(st, ln, i, netSegs + btSegs, false));
+        }
+        if (btSegs > 0 && btBytes > 0) {
+            segs.add(new SuperSeg(netBytes, btBytes, netSegs, netSegs + 1, true));
+        }
+        final int count = segs.size();
+        final AtomicInteger remaining = new AtomicInteger(count);
+        final int btCount = btSegs;
+        ui.post(new Runnable() { public void run() {
+            status.setText("超级快传 · 网络 " + netSegs + " 段 + 蓝牙 " + btCount + " 段并行（按带宽分配）");
+        }});
+
+        for (int i = 0; i < segs.size(); i++) {
+            final SuperSeg seg = segs.get(i);
+            runSuperSeg(seg, ips, dev, id, name, size, done, remaining, failed);
+        }
+    }
+
+    void runSuperSeg(final SuperSeg seg, final List<String> ips, final Dev dev, final String id,
+                     final String name, final long size, final AtomicLong done,
+                     final AtomicInteger remaining, final AtomicBoolean failed) {
+        pool.execute(new Runnable() {
+            public void run() {
+                Object sock = null;
+                try {
+                    sock = seg.bt ? btConnect(dev.bt) : tcpConnect(ips);
+                    OutputStream out = outOf(sock);
+                    JSONObject h = new JSONObject();
+                    h.put("type", "chunk");
+                    h.put("id", id);
+                    h.put("name", name);
+                    h.put("size", size);
+                    h.put("start", seg.start);
+                    h.put("len", seg.len);
+                    h.put("index", seg.index);
+                    h.put("total", seg.total);
+                    h.put("from", localNameStr());
+                    h.put("super", true);
+                    out.write((h.toString() + "\n").getBytes("UTF-8"));
+                    out.flush();
+                    InputStream fin = getContentResolver().openInputStream(sendUri);
+                    skipFully(fin, seg.start);
+                    byte[] buf = new byte[8192];
+                    long sent = 0;
+                    while (sent < seg.len) {
+                        int r = fin.read(buf, 0, (int) Math.min(buf.length, seg.len - sent));
+                        if (r <= 0) break;
+                        out.write(buf, 0, r);
+                        sent += r;
+                        postProgress(done.addAndGet(r), size, true);
+                    }
+                    fin.close();
+                    out.flush();
+                    InputStream ackIn = new BufferedInputStream(inOf(sock));
+                    int ack = ackIn.read();
+                    if (ack != 'K') throw new IOException("super ack " + ack);
+                    if (remaining.decrementAndGet() == 0) finishSuper(size, failed.get(), seg.total);
+                } catch (Throwable t) {
+                    if (seg.tries < 1) {
+                        seg.tries++;
+                        close(sock);
+                        ui.postDelayed(new Runnable() { public void run() {
+                            runSuperSeg(seg, ips, dev, id, name, size, done, remaining, failed);
+                        }}, 400);
+                        return;
+                    }
+                    failed.set(true);
+                    if (remaining.decrementAndGet() == 0) finishSuper(size, true, seg.total);
+                } finally {
+                    close(sock);
+                }
+            }
+        });
+    }
+
+    void finishSuper(final long size, final boolean failed, final int total) {
+        ui.post(new Runnable() { public void run() {
+            setBusy(false);
+            progressRowSet(false);
+            if (failed) status.setText("超级快传未完成：部分分片失败，可重试");
+            else status.setText("超级快传完成 · " + human(size) + " · " + total + " 片并行");
+        }});
     }
 
     int segmentsFor(long size, boolean allowBt) {
@@ -1596,7 +2013,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    void connectOverTcp(final List<String> ips) {
+    void connectOverTcp(final List<String> ips, final long rt) {
         pool.execute(new Runnable() {
             public void run() {
                 String last = "";
@@ -1605,20 +2022,25 @@ public class MainActivity extends Activity {
                     try {
                         s = new Socket();
                         s.connect(new InetSocketAddress(ips.get(i), PORT), 7000);
+                        routeDataStarted = true;
                         transfer(s, pendingType, pendingName, pendingSize, pendingText);
                         return;
                     } catch (Throwable t) {
                         last = t.getClass().getSimpleName();
+                        if (routeDataStarted) {
+                            final String m = "网络传输中断：" + last;
+                            ui.post(new Runnable() { public void run() { routeFailed(rt, m); }});
+                            return;
+                        }
                     } finally { close(s); }
                 }
-                final String msg = "网络传输失败：" + last;
-                ui.post(new Runnable() { public void run() { setBusy(false); status.setText(msg); }});
+                final String msg = "网络连接失败：" + last;
+                ui.post(new Runnable() { public void run() { routeFailed(rt, msg); }});
             }
         });
     }
 
-    void connectAndHandshakeBt(final Dev dev, final String name, final long size, final String type, final String text) {
-        sendPending = false;
+    void connectAndHandshakeBt(final Dev dev, final String name, final long size, final String type, final String text, final String prefer, final long rt) {
         pool.execute(new Runnable() {
             public void run() {
                 BluetoothSocket s = null;
@@ -1636,6 +2058,7 @@ public class MainActivity extends Activity {
                     JSONObject h = new JSONObject();
                     h.put("type", "handshake");
                     h.put("from", localNameStr());
+                    h.put("prefer", prefer);
                     out.write((h.toString() + "\n").getBytes("UTF-8"));
                     out.flush();
                     InputStream in = new BufferedInputStream(inOf(s));
@@ -1647,26 +2070,32 @@ public class MainActivity extends Activity {
                         final String ssid = r.optString("ssid", "");
                         final String pass = r.optString("pass", "");
                         ui.post(new Runnable() { public void run() { status.setText("握手成功，正在加入对方热点…"); }});
-                        joinHotspot(ssid, pass);
+                        joinHotspot(ssid, pass, rt);
+                    } else if ("wfd".equals(m)) {
+                        if (dev.p2p != null && wifiSend) {
+                            ui.post(new Runnable() { public void run() { status.setText("握手成功，正在切换 Wi‑Fi 直连…"); }});
+                            connectP2p(dev, 0, rt);
+                        } else {
+                            routeFailed(rt, "对方选择 Wi‑Fi 直连，但本机未发现其直连设备");
+                        }
+                    } else if ("bt".equals(m)) {
+                        routeFailed(rt, "对方只允许蓝牙接收");
                     } else {
-                        ui.post(new Runnable() { public void run() { status.setText("握手成功，对方热点未就绪，改用蓝牙直传"); }});
-                        connectAndSendBt(dev, name, size, type, text);
+                        routeFailed(rt, "对方没有可用的网络接收方式");
                     }
                 } catch (final Throwable t) {
                     ui.post(new Runnable() { public void run() {
-                        setBusy(false);
-                        status.setText("P2P 握手失败：" + t.getClass().getSimpleName() + "，可改用普通蓝牙发送");
+                        routeFailed(rt, "P2P 握手失败：" + t.getClass().getSimpleName());
                     }});
                 } finally { close(s); }
             }
         });
     }
 
-    void joinHotspot(final String ssid, final String pass) {
+    void joinHotspot(final String ssid, final String pass, final long rt) {
         if (TextUtils.isEmpty(ssid)) {
             ui.post(new Runnable() { public void run() {
-                setBusy(false);
-                status.setText("对方热点信息不完整，可改用普通蓝牙发送");
+                routeFailed(rt, "对方热点信息不完整");
             }});
             return;
         }
@@ -1688,17 +2117,19 @@ public class MainActivity extends Activity {
                             List<String> ips = new ArrayList<String>();
                             ips.add(gw);
                             if (!ips.contains("192.168.43.1")) ips.add("192.168.43.1");
-                            if (chunkEnabled && "file".equals(pendingType)) {
-                                startChunkedIps(ips, pendingDev != null && pendingDev.bt != null && btOn && pendingSize >= 8L * 1024 * 1024);
+                            if (superSend && chunkEnabled && "file".equals(pendingType) && pendingSize >= MULTI_MIN) {
+                                startSuperSend(ips, currentNetWeight());
+                            } else if (chunkEnabled && "file".equals(pendingType)) {
+                                routeDataStarted = true;
+                                startChunkedIps(ips, pendingDev != null && pendingDev.bt != null && btSend && pendingSize >= 8L * 1024 * 1024);
                             } else {
-                                connectOverTcp(ips);
+                                connectOverTcp(ips, rt);
                             }
                         }}, 1200);
                     }
                     public void onUnavailable() {
                         ui.post(new Runnable() { public void run() {
-                            setBusy(false);
-                            status.setText("加入热点失败，可改用普通蓝牙发送");
+                            routeFailed(rt, "加入热点失败");
                         }});
                     }
                 };
@@ -1722,15 +2153,17 @@ public class MainActivity extends Activity {
             ui.postDelayed(new Runnable() { public void run() {
                 List<String> ips = new ArrayList<String>();
                 ips.add("192.168.43.1");
-                if (chunkEnabled && "file".equals(pendingType)) {
-                    startChunkedIps(ips, pendingDev != null && pendingDev.bt != null && btOn && pendingSize >= 8L * 1024 * 1024);
+                if (superSend && chunkEnabled && "file".equals(pendingType) && pendingSize >= MULTI_MIN) {
+                    startSuperSend(ips, currentNetWeight());
+                } else if (chunkEnabled && "file".equals(pendingType)) {
+                    routeDataStarted = true;
+                    startChunkedIps(ips, pendingDev != null && pendingDev.bt != null && btSend && pendingSize >= 8L * 1024 * 1024);
                 } else {
-                    connectOverTcp(ips);
+                    connectOverTcp(ips, rt);
                 }
             }}, 4500);
         } catch (Throwable t) {
-            setBusy(false);
-            status.setText("连接热点失败：" + t.getClass().getSimpleName());
+            routeFailed(rt, "连接热点失败：" + t.getClass().getSimpleName());
         }
     }
 
@@ -1748,8 +2181,7 @@ public class MainActivity extends Activity {
         return "192.168.43.1";
     }
 
-    void connectAndSendBt(final Dev dev, final String name, final long size, final String type, final String text) {
-        sendPending = false;
+    void connectAndSendBt(final Dev dev, final String name, final long size, final String type, final String text, final long rt) {
         pool.execute(new Runnable() {
             public void run() {
                 BluetoothSocket s = null;
@@ -1764,11 +2196,11 @@ public class MainActivity extends Activity {
                         s.connect();
                     }
                     ui.post(new Runnable() { public void run() { status.setText("已连接蓝牙，正在发送…"); }});
+                    routeDataStarted = true;
                     transfer(s, type, name, size, text);
                 } catch (final Throwable t) {
                     ui.post(new Runnable() { public void run() {
-                        setBusy(false);
-                        status.setText("蓝牙连接失败：" + t.getClass().getSimpleName() + "（请确认对方已打开接收页）");
+                        routeFailed(rt, "蓝牙连接失败：" + t.getClass().getSimpleName() + "（请确认对方接收开关）");
                     }});
                 } finally { close(s); }
             }
@@ -1831,18 +2263,38 @@ public class MainActivity extends Activity {
             final String text = h.optString("text", "");
             final String from = h.optString("from", "对方");
             if ("handshake".equals(type)) {
+                String prefer = h.optString("prefer", "");
                 JSONObject r = new JSONObject();
                 r.put("type", "net");
-                if (!TextUtils.isEmpty(hotSsid) && !TextUtils.isEmpty(hotPass)) {
-                    r.put("mode", "hotspot");
+                String mode = "none";
+                if (p2pRecv) {
+                    if ("hotspot".equals(prefer) && hotspotRecv && !TextUtils.isEmpty(hotSsid) && !TextUtils.isEmpty(hotPass)) {
+                        mode = "hotspot";
+                    } else if ("wfd".equals(prefer) && wifiRecv) {
+                        mode = "wfd";
+                    } else if (hotspotRecv && !TextUtils.isEmpty(hotSsid) && !TextUtils.isEmpty(hotPass)) {
+                        mode = "hotspot";
+                    } else if (wifiRecv) {
+                        mode = "wfd";
+                    }
+                }
+                if ("none".equals(mode) && btRecv) mode = "bt";
+                r.put("mode", mode);
+                if ("hotspot".equals(mode)) {
                     r.put("ssid", hotSsid);
                     r.put("pass", hotPass);
-                } else {
-                    r.put("mode", "wfd");
                 }
                 OutputStream netOut = outOf(s);
                 netOut.write((r.toString() + "\n").getBytes("UTF-8"));
                 netOut.flush();
+                return;
+            }
+            if ("蓝牙".equals(via) && !btRecv) {
+                try {
+                    OutputStream ack = outOf(s);
+                    ack.write('E');
+                    ack.flush();
+                } catch (Throwable ignored) {}
                 return;
             }
             if ("chunk".equals(type)) {

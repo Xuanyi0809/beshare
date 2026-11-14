@@ -9,8 +9,8 @@
 [官网下载页](https://beshare.rth1.xyz) · [GitHub Releases](https://github.com/Xuanyi0809/beshare/releases)
 
 ![platform](https://img.shields.io/badge/Platform-Android%206.0%2B-3DDC84?logo=android&logoColor=white)
-![version](https://img.shields.io/badge/Version-1.5-2563EB)
-![size](https://img.shields.io/badge/APK-53%20KB-2563EB)
+![version](https://img.shields.io/badge/Version-1.5.2-2563EB)
+![size](https://img.shields.io/badge/APK-57%20KB-2563EB)
 ![license](https://img.shields.io/badge/License-MIT-blue)
 ![org](https://img.shields.io/badge/Org-CircleHub-2563EB)
 
@@ -29,7 +29,9 @@
 ## 特性
 
 - **定向传输**：发送前必须选中某台设备，不会向局域网/蓝牙/P2P 里所有设备广播
-- **四个独立开关**：设置在「设置」页里，Wi‑Fi 直连、蓝牙、P2P 握手、应用内热点可分别开关
+- **发送/接收分开配置**：发送端与接收端各有一套 Wi‑Fi、P2P、热点、蓝牙开关，互不影响
+- **发送优先级**：四路顺序可调，#1 最优先、#4 兜底，线路失败自动尝试下一路
+- **超级快传**：默认关闭；开启后网络与蓝牙按带宽权重并行分片，大文件速度与稳定性优先
 - **多线路**
   - `Wi-Fi Direct (P2P)`：接收端建组当 GO，发送端加入后走 TCP，适合大文件
   - `应用内热点`：接收端开 LocalOnlyHotspot，SSID/密码经蓝牙握手交给发送端
@@ -129,6 +131,14 @@
 | `WRITE_EXTERNAL_STORAGE`（≤ Android 9） | 旧版本写入下载目录 |
 
 App 不申请通讯录、短信、相机、后台定位，也不含任何统计 SDK。
+
+## 1.5.2 更新
+
+- 发送与接收传输开关彻底分开：发送端四个开关只影响自己，接收端四个开关只决定允许哪些方式接入
+- 发送端新增四路优先级：#1 最优先、#4 兜底，可用上下箭头调整顺序；优先线路失败会自动回退到下一路
+- 新增「超级快传」设置（默认关闭）：网络 TCP 多连接与蓝牙并行，按 WiFi/P2P/热点/蓝牙的带宽权重分配分片
+- 接收端不设优先级，只保留四个启用开关，四项默认全部开启
+- 增加线路失败自动回退、发送/接收设置热切换、超级快传分片失败重试
 
 ## 1.5.1 更新
 
