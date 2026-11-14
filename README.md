@@ -9,10 +9,10 @@
 [官网下载页](https://beshare.rth1.xyz) · [GitHub Releases](https://github.com/Xuanyi0809/beshare/releases)
 
 ![platform](https://img.shields.io/badge/Platform-Android%206.0%2B-3DDC84?logo=android&logoColor=white)
-![version](https://img.shields.io/badge/Version-1.4-4F7CFF)
-![size](https://img.shields.io/badge/APK-33%20KB-4F7CFF)
+![version](https://img.shields.io/badge/Version-1.5-2563EB)
+![size](https://img.shields.io/badge/APK-45%20KB-2563EB)
 ![license](https://img.shields.io/badge/License-MIT-blue)
-![org](https://img.shields.io/badge/Org-CircleHub-4F7CFF)
+![org](https://img.shields.io/badge/Org-CircleHub-2563EB)
 
 </div>
 
@@ -22,29 +22,32 @@
 
 快传是一个**完全本地运行**的安卓文件互传工具。两台手机都打开 App，接收端停在「接收」页，发送端在设备列表里**选中唯一目标**，即可发送文字、图片或任意文件。
 
-没有中转服务器，没有网页版，没有账号体系，文件不经过任何第三方。数据只在两台设备之间走：优先 Wi-Fi Direct 直连，没有条件时自动退回蓝牙 RFCOMM。
+没有中转服务器，没有网页版，没有账号体系，文件不经过任何第三方。数据只在两台设备之间走：优先 Wi-Fi Direct 直连，也可切到应用内热点；大文件自动按线路数分块，多条连接并行传输。
 
 > 它解决的正是「微信传文件压图、网盘要登录、快传类 App 满屏广告」这些事——打开就用，传完即走。
 
 ## 特性
 
 - **定向传输**：发送前必须选中某台设备，不会向局域网/蓝牙/P2P 里所有设备广播
-- **双通道**
+- **四个独立开关**：设置在「设置」页里，Wi‑Fi 直连、蓝牙、P2P 握手、应用内热点可分别开关
+- **多线路**
   - `Wi-Fi Direct (P2P)`：接收端建组当 GO，发送端加入后走 TCP，适合大文件
+  - `应用内热点`：接收端开 LocalOnlyHotspot，SSID/密码经蓝牙握手交给发送端
   - `Bluetooth RFCOMM`：负责发现、握手与兜底，P2P 不可用时照样能传
+- **大文件自动分段**：≥4 MB 按 2–4 段切块，可同时走多条 TCP 连接；有蓝牙线路时再分一块给蓝牙，收齐后合并落盘
 - **全类型文件**：系统文件选择器（SAF）选任意文件，不申请存储权限也能发
 - **文字消息**：直接发送文本，接收端可一键复制
-- **MD3 设计**：Material 3 配色与形态（圆角卡片、胶囊标签、状态卡），跟随系统深色模式
+- **MD3 设计**：Material 3 配色与形态（大圆角卡片、分区设置页、胶囊标签、状态卡），跟随系统深色模式
 - **落盘可见**：Android 10+ 写入 `下载/快传`（MediaStore），旧版本写入公共下载目录；保留原文件名，同名自动加序号
-- **零依赖**：不依赖 AndroidX / Material Components，纯 framework Java，APK 仅 33 KB
+- **零依赖**：不依赖 AndroidX / Material Components，纯 framework Java，APK 仅 45 KB
 - **无后台服务**：不需要常驻通知、不需要登录，退出即结束
 
 ## 界面与交互
 
 ```
 ┌─────────────────────────────┐
-│ 快传                         │
-│ Wi-Fi 直连 · 蓝牙 · 无服务器  │
+│ 快传                    [设置]│
+│ 多线路传输 · 无服务器         │
 │                             │
 │ ┌────────┐  ┌────────┐      │
 │ │  发送  │  │  接收  │      │
@@ -68,6 +71,7 @@
 ```
 
 - `W` = Wi-Fi Direct 设备，`B` = 蓝牙设备；同一台机器可能两项都出现，优先选 `W`
+- 右上角「设置」里集中管理 P2P、热点、Wi‑Fi、蓝牙开关，以及官网/更新与关于
 - 点状态卡或「重新搜索」可重新发现
 - 传输中显示百分比进度，发送按钮自动锁定防止重复触发
 

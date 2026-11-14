@@ -3,6 +3,7 @@ package com.circlehub.beshare;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.Dialog;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothServerSocket;
@@ -13,10 +14,13 @@ import android.content.ClipboardManager;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
+import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.ConnectivityManager;
 import android.net.LinkProperties;
@@ -46,10 +50,12 @@ import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
 import android.webkit.MimeTypeMap;
+import android.widget.CompoundButton;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -58,19 +64,30 @@ import org.json.JSONObject;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.RandomAccessFile;
 import java.io.OutputStream;
 import java.lang.reflect.Method;
+import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.net.URL;
 import java.net.Socket;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class MainActivity extends Activity {
 
@@ -86,6 +103,7 @@ public class MainActivity extends Activity {
     BluetoothServerSocket btServer;
     ServerSocket tcpServer;
     boolean serversRunning = false;
+    volatile boolean tcpRunning = false;
     boolean groupReady = false;
     String localIp = "";
 
@@ -96,6 +114,12 @@ public class MainActivity extends Activity {
     long sendSize = 0;
     boolean sendPending = false;
     boolean p2pMode = false;
+    boolean wifiOn = true;
+    boolean btOn = true;
+    boolean hotspotOn = false;
+    boolean settingsOpen = false;
+    boolean autoUpdate = true;
+    boolean updateChecking = false;
     WifiManager.LocalOnlyHotspotReservation hotRes;
     String hotSsid = "", hotPass = "";
     ConnectivityManager.NetworkCallback hotspotCb;
@@ -118,14 +142,14 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         dark = (getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
                 == android.content.res.Configuration.UI_MODE_NIGHT_YES;
-        cBg = dark ? 0xFF101418 : 0xFFF5F6FA;
+        cBg = dark ? 0xFF101418 : 0xFFF4F7FC;
         cCard = dark ? 0xFF1B2027 : 0xFFFFFFFF;
-        cText = dark ? 0xFFE8ECF2 : 0xFF11161C;
-        cSub = dark ? 0xFF97A1AE : 0xFF67707C;
-        cPrimary = 0xFF4F7CFF;
+        cText = dark ? 0xFFE8ECF2 : 0xFF10141B;
+        cSub = dark ? 0xFF97A1AE : 0xFF6B7480;
+        cPrimary = 0xFF2563EB;
         cOnPrimary = 0xFFFFFFFF;
-        cPrimarySoft = dark ? 0xFF25324F : 0xFFE6ECFF;
-        cLine = dark ? 0xFF2A313A : 0xFFE3E7EF;
+        cPrimarySoft = dark ? 0xFF1E2A44 : 0xFFE8EFFF;
+        cLine = dark ? 0xFF2A313A : 0xFFE4E9F2;
 
         Window w = getWindow();
         w.setStatusBarColor(cBg);
@@ -134,9 +158,17 @@ public class MainActivity extends Activity {
             w.getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
         }
 
+        SharedPreferences sp = getSharedPreferences("beshare", 0);
+        wifiOn = sp.getBoolean("wifi", true);
+        btOn = sp.getBoolean("bt", true);
+        p2pMode = sp.getBoolean("p2p", false);
+        hotspotOn = sp.getBoolean("hotspot", false);
+        autoUpdate = sp.getBoolean("autoUpdate", true);
+
         buildUi();
         initRadios();
         ensurePermissions();
+        ui.postDelayed(new Runnable() { public void run() { checkUpdate(false); } }, 2600);
     }
 
     /* ---------------- UI ---------------- */
@@ -169,12 +201,321 @@ public class MainActivity extends Activity {
         chipP2P.setBackground(round(p2pMode ? cPrimary : cCard, 18, p2pMode ? 0 : 1, cLine));
     }
 
+    void openUrl(String url) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (Throwable t) {
+            Toast.makeText(this, "没有可用的浏览器", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    int currentVersionCode() {
+        try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionCode; }
+        catch (Throwable t) { return 0; }
+    }
+
+    String currentVersionName() {
+        try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; }
+        catch (Throwable t) { return "1.5"; }
+    }
+
+    String fetchText(String url) throws Exception {
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        c.setConnectTimeout(8000);
+        c.setReadTimeout(8000);
+        c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) BeShare/" + currentVersionName());
+        c.setRequestProperty("Cache-Control", "no-cache");
+        InputStream in = c.getInputStream();
+        ByteArrayOutputStream b = new ByteArrayOutputStream();
+        byte[] buf = new byte[4096];
+        int n;
+        while ((n = in.read(buf)) > 0) b.write(buf, 0, n);
+        in.close();
+        c.disconnect();
+        return new String(b.toByteArray(), "UTF-8");
+    }
+
+    void checkUpdate(final boolean manual) {
+        if (updateChecking) return;
+        if (!manual && !autoUpdate) return;
+        updateChecking = true;
+        if (manual) Toast.makeText(this, "正在检查更新…", Toast.LENGTH_SHORT).show();
+        pool.execute(new Runnable() {
+            public void run() {
+                Throwable last = null;
+                String[] urls = new String[]{
+                        "https://beshare.rth1.xyz/version.json?t=" + System.currentTimeMillis(),
+                        "https://raw.githubusercontent.com/Xuanyi0809/beshare/main/version.json?t=" + System.currentTimeMillis()
+                };
+                for (int i = 0; i < urls.length; i++) {
+                    try {
+                        String body = fetchText(urls[i]);
+                        JSONObject j = new JSONObject(body);
+                        final int code = j.optInt("versionCode", 0);
+                        final String vn = j.optString("versionName", "");
+                        final String apk = j.optString("url", "https://beshare.rth1.xyz");
+                        final String notes = j.optString("notes", "");
+                        final int now = currentVersionCode();
+                        updateChecking = false;
+                        if (code > now) {
+                            ui.post(new Runnable() { public void run() { showUpdateDialog(vn, apk, notes); }});
+                        } else if (manual) {
+                            ui.post(new Runnable() { public void run() {
+                                Toast.makeText(MainActivity.this, "已是最新版本 v" + currentVersionName(), Toast.LENGTH_SHORT).show();
+                            }});
+                        }
+                        return;
+                    } catch (Throwable t) { last = t; }
+                }
+                updateChecking = false;
+                if (manual) {
+                    final String m = last == null ? "未知错误" : last.getClass().getSimpleName();
+                    ui.post(new Runnable() { public void run() {
+                        Toast.makeText(MainActivity.this, "检查更新失败：" + m, Toast.LENGTH_SHORT).show();
+                    }});
+                }
+            }
+        });
+    }
+
+    void showUpdateDialog(String version, final String url, String notes) {
+        final Dialog d = new Dialog(this);
+        d.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(22), dp(20), dp(22), dp(18));
+        card.setBackground(round(cCard, 26, 0, 0));
+        TextView t = text("发现新版本 v" + version, 20, cText, true);
+        card.addView(t);
+        TextView sub = text("当前 v" + currentVersionName() + " · 更新包由官网直链提供", 11, cSub, false);
+        sub.setPadding(0, dp(6), 0, dp(10));
+        card.addView(sub);
+        TextView body = text(TextUtils.isEmpty(notes) ? "建议更新以获得更好的传输稳定性。" : notes, 13, cText, false);
+        body.setPadding(0, 0, 0, dp(16));
+        card.addView(body);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        TextView later = text("稍后", 14, cSub, true);
+        later.setGravity(Gravity.CENTER);
+        later.setPadding(0, dp(11), 0, dp(11));
+        later.setBackground(round(cCard, 22, 1, cLine));
+        LinearLayout.LayoutParams l1 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+        l1.rightMargin = dp(10);
+        later.setLayoutParams(l1);
+        later.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { d.dismiss(); }});
+        TextView go = text("立即更新", 14, cOnPrimary, true);
+        go.setGravity(Gravity.CENTER);
+        go.setPadding(0, dp(11), 0, dp(11));
+        go.setBackground(round(cPrimary, 22, 0, 0));
+        go.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        go.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { d.dismiss(); openUrl(url); }
+        });
+        row.addView(later);
+        row.addView(go);
+        card.addView(row);
+        d.setContentView(card);
+        d.show();
+        try {
+            Window w = d.getWindow();
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            w.setLayout((int) (getResources().getDisplayMetrics().widthPixels * 0.9),
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+        } catch (Throwable ignored) {}
+    }
+
     void openSite() {
         try {
             startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://beshare.rth1.xyz")));
         } catch (Throwable t) {
             Toast.makeText(this, "没有可用的浏览器", Toast.LENGTH_SHORT).show();
         }
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (settingsOpen) { closeSettings(); return; }
+        super.onBackPressed();
+    }
+
+    void openSettings() {
+        settingsOpen = true;
+        setContentView(buildSettingsView());
+    }
+
+    void closeSettings() {
+        settingsOpen = false;
+        setContentView(root);
+    }
+
+    LinearLayout settingsCard() {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setBackground(round(cCard, 22, 1, cLine));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.bottomMargin = dp(10);
+        c.setLayoutParams(lp);
+        return c;
+    }
+
+    LinearLayout switchRow(String title, String desc, boolean checked, CompoundButton.OnCheckedChangeListener l) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(16), dp(14), dp(12), dp(14));
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        col.addView(text(title, 15, cText, true));
+        TextView d = text(desc, 11, cSub, false);
+        d.setPadding(0, dp(4), dp(10), 0);
+        col.addView(d);
+        row.addView(col);
+        Switch sw = new Switch(this);
+        sw.setChecked(checked);
+        sw.setThumbTintList(ColorStateList.valueOf(cPrimary));
+        sw.setOnCheckedChangeListener(l);
+        row.addView(sw);
+        return row;
+    }
+
+    LinearLayout actionRow(String title, String desc, View.OnClickListener l) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(16), dp(14), dp(16), dp(14));
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        col.addView(text(title, 15, cText, true));
+        TextView d = text(desc, 11, cSub, false);
+        d.setPadding(0, dp(4), 0, 0);
+        col.addView(d);
+        row.addView(col);
+        TextView arrow = text("›", 22, cSub, false);
+        row.addView(arrow);
+        row.setOnClickListener(l);
+        return row;
+    }
+
+    void stopWfdGroup() {
+        try {
+            if (wfd != null && wch != null) wfd.removeGroup(wch, new WifiP2pManager.ActionListener() {
+                public void onSuccess() {}
+                public void onFailure(int reason) {}
+            });
+        } catch (Throwable ignored) {}
+        groupReady = false;
+    }
+
+    void onToggleChanged() {
+        try {
+            getSharedPreferences("beshare", 0).edit()
+                    .putBoolean("wifi", wifiOn)
+                    .putBoolean("bt", btOn)
+                    .putBoolean("p2p", p2pMode)
+                    .putBoolean("hotspot", hotspotOn)
+                    .apply();
+        } catch (Throwable ignored) {}
+        if (mode == 1) {
+            stopHotspot();
+            if (!wifiOn) stopWfdGroup();
+            startReceiver();
+        } else {
+            devices.clear();
+            target = null;
+            renderDevices();
+            if (btOn) startBtDiscovery();
+            if (wifiOn) startWfdDiscovery();
+            status.setText("开关已更新：Wi‑Fi 直连 " + (wifiOn ? "开" : "关")
+                    + " · 蓝牙 " + (btOn ? "开" : "关")
+                    + " · P2P " + (p2pMode ? "开" : "关")
+                    + " · 热点 " + (hotspotOn ? "开" : "关"));
+        }
+    }
+
+    LinearLayout buildSettingsView() {
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setBackgroundColor(cBg);
+        page.setFitsSystemWindows(true);
+
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setPadding(dp(16), dp(14), dp(16), dp(8));
+        TextView back = text("返回", 12, cPrimary, true);
+        back.setGravity(Gravity.CENTER);
+        back.setPadding(dp(12), dp(8), dp(12), dp(8));
+        back.setBackground(round(cPrimarySoft, 18, 0, 0));
+        back.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { closeSettings(); }
+        });
+        head.addView(back);
+        TextView title = text("设置", 26, cText, true);
+        title.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        title.setPadding(dp(14), 0, 0, 0);
+        head.addView(title);
+        page.addView(head);
+
+        ScrollView sc = new ScrollView(this);
+        sc.setClipToPadding(false);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(4), dp(16), dp(24));
+        sc.addView(box, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        page.addView(sc, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+
+        TextView sec1 = text("传输开关", 12, cSub, true);
+        sec1.setPadding(dp(4), dp(10), 0, dp(8));
+        box.addView(sec1);
+        LinearLayout card1 = settingsCard();
+        card1.addView(switchRow("Wi‑Fi 直连", "Wi‑Fi Direct 发现并直连对方，负责高速 TCP 传输", wifiOn,
+                new CompoundButton.OnCheckedChangeListener() {
+                    public void onCheckedChanged(CompoundButton b, boolean v) { wifiOn = v; onToggleChanged(); }
+                }));
+        card1.addView(switchRow("蓝牙", "发现附近设备、完成握手，并可兜底传文件", btOn,
+                new CompoundButton.OnCheckedChangeListener() {
+                    public void onCheckedChanged(CompoundButton b, boolean v) { btOn = v; onToggleChanged(); }
+                }));
+        card1.addView(switchRow("P2P 握手", "选中蓝牙设备后先握手，再切到热点或 Wi‑Fi 直连", p2pMode,
+                new CompoundButton.OnCheckedChangeListener() {
+                    public void onCheckedChanged(CompoundButton b, boolean v) { p2pMode = v; onToggleChanged(); }
+                }));
+        card1.addView(switchRow("应用内热点", "接收端创建临时热点，发送端自动加入后传输", hotspotOn,
+                new CompoundButton.OnCheckedChangeListener() {
+                    public void onCheckedChanged(CompoundButton b, boolean v) { hotspotOn = v; onToggleChanged(); }
+                }));
+        box.addView(card1);
+
+        TextView sec2 = text("关于与更新", 12, cSub, true);
+        sec2.setPadding(dp(4), dp(10), 0, dp(8));
+        box.addView(sec2);
+        LinearLayout card2 = settingsCard();
+        card2.addView(switchRow("自动检查更新", "启动时读取官网 version.json，有新版本会弹窗提示", autoUpdate,
+                new CompoundButton.OnCheckedChangeListener() {
+                    public void onCheckedChanged(CompoundButton b, boolean v) {
+                        autoUpdate = v;
+                        try { getSharedPreferences("beshare", 0).edit().putBoolean("autoUpdate", v).apply(); } catch (Throwable ignored) {}
+                    }
+                }));
+        card2.addView(actionRow("检查更新", "当前 v1.5 · 手动检查一次", new View.OnClickListener() {
+            public void onClick(View v) { checkUpdate(true); }
+        }));
+        card2.addView(actionRow("官网 / 更新", "打开 beshare.rth1.xyz，获取最新版本", new View.OnClickListener() {
+            public void onClick(View v) { openSite(); }
+        }));
+        card2.addView(actionRow("关于快传", "v1.5 · CircleHub · 无服务器 · 无网页 · 文件只在两台设备间直传", new View.OnClickListener() {
+            public void onClick(View v) {
+                Toast.makeText(MainActivity.this, "快传 1.5 · 多线路 P2P 传输", Toast.LENGTH_SHORT).show();
+            }
+        }));
+        box.addView(card2);
+
+        TextView note = text("提示：热点与 Wi‑Fi 直连共用无线网卡，接收端优先按热点开关决定；至少保留蓝牙或 Wi‑Fi 之一才能发现设备。", 11, cSub, false);
+        note.setPadding(dp(6), dp(6), dp(6), 0);
+        box.addView(note);
+        return page;
     }
 
     void buildUi() {
@@ -192,38 +533,17 @@ public class MainActivity extends Activity {
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = text("快传", 27, cText, true);
         title.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        chipP2P = text("P2P", 12, cSub, true);
-        chipP2P.setGravity(Gravity.CENTER);
-        chipP2P.setPadding(dp(10), dp(7), dp(10), dp(7));
-        chipP2P.setBackground(round(cCard, 18, 1, cLine));
-        chipP2P.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) {
-                p2pMode = !p2pMode;
-                updateP2P();
-                if (mode == 1) {
-                    stopHotspot();
-                    startReceiver();
-                } else {
-                    status.setText(p2pMode ? "P2P 已开启：发送前会先蓝牙握手，再用热点/直连传输" : "已切回普通传输");
-                }
-            }
-        });
-        TextView update = text("官网 · 更新", 12, cPrimary, true);
-        update.setGravity(Gravity.CENTER);
-        update.setPadding(dp(12), dp(7), dp(12), dp(7));
-        update.setBackground(round(cPrimarySoft, 18, 0, 0));
-        update.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) { openSite(); }
+        TextView settings = text("设置", 12, cPrimary, true);
+        settings.setGravity(Gravity.CENTER);
+        settings.setPadding(dp(14), dp(8), dp(14), dp(8));
+        settings.setBackground(round(cPrimarySoft, 18, 0, 0));
+        settings.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { openSettings(); }
         });
         titleRow.addView(title);
-        titleRow.addView(chipP2P);
-        LinearLayout.LayoutParams p2plp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        p2plp.rightMargin = dp(8);
-        chipP2P.setLayoutParams(p2plp);
-        titleRow.addView(update);
-        updateP2P();
+        titleRow.addView(settings);
         head.addView(titleRow);
-        TextView sub = text("v1.4 · Wi-Fi 直连 · 蓝牙 · 无服务器 · 不经过网页", 12, cSub, false);
+        TextView sub = text("v1.5 · 多线路传输 · 无服务器 · 不经过网页", 12, cSub, false);
         sub.setPadding(0, dp(4), 0, 0);
         head.addView(sub);
         root.addView(head);
@@ -264,7 +584,7 @@ public class MainActivity extends Activity {
                 if (mode == 0) {
                     devices.clear(); target = null; renderDevices();
                     status.setText("重新搜索中…");
-                    startBtDiscovery(); startWfdDiscovery();
+                    if (btOn) startBtDiscovery(); if (wifiOn) startWfdDiscovery();
                 }
             }
         });
@@ -287,7 +607,7 @@ public class MainActivity extends Activity {
                 if (mode != 0) return;
                 devices.clear(); target = null; renderDevices();
                 status.setText("重新搜索中…");
-                startBtDiscovery(); startWfdDiscovery();
+                if (btOn) startBtDiscovery(); if (wifiOn) startWfdDiscovery();
             }
         });
         scanRow.addView(scanHint);
@@ -353,8 +673,9 @@ public class MainActivity extends Activity {
         recvBtn.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 if (serversRunning) {
-                    makeDiscoverable();
-                    createGroup();
+                    if (btOn) makeDiscoverable();
+                    if (hotspotOn) startHotspot();
+                    else if (wifiOn) createGroup();
                     status.setText("接收中：让对方在「发送」里选中本机");
                 } else {
                     startReceiver();
@@ -425,9 +746,10 @@ public class MainActivity extends Activity {
         listBox.removeAllViews();
         if (m == 0) {
             stopHotspot();
+            stopWfdGroup();
             status.setText("正在搜索附近的设备…");
-            startBtDiscovery();
-            startWfdDiscovery();
+            if (btOn) startBtDiscovery();
+            if (wifiOn) startWfdDiscovery();
             renderDevices();
         } else {
             status.setText("点下方「接收」按钮开始等待对方");
@@ -491,7 +813,7 @@ public class MainActivity extends Activity {
             status.setText("权限未全部授予：蓝牙/定位/附近设备权限会影响搜索与直连");
             Toast.makeText(this, "请在设置中允许蓝牙与附近设备权限", Toast.LENGTH_LONG).show();
         }
-        if (mode == 0) { startBtDiscovery(); startWfdDiscovery(); }
+        if (mode == 0) { if (btOn) startBtDiscovery(); if (wifiOn) startWfdDiscovery(); }
     }
 
     /* ---------------- 广播 ---------------- */
@@ -525,6 +847,10 @@ public class MainActivity extends Activity {
 
     void addDevice(Dev d) {
         for (Dev x : devices) {
+            if (x.kind != d.kind && x.name != null && d.name != null && x.name.equalsIgnoreCase(d.name)) {
+                if (d.kind == 1 && d.bt != null) x.bt = d.bt;
+                if (d.kind == 0 && d.p2p != null) x.p2p = d.p2p;
+            }
             if (x.kind == d.kind && x.addr != null && x.addr.equals(d.addr)) {
                 x.name = d.name;
                 x.bt = d.bt;
@@ -621,13 +947,21 @@ public class MainActivity extends Activity {
     }
 
     void startReceiver() {
+        if (!btOn && !wifiOn && !hotspotOn) {
+            status.setText("请先在设置里打开 Wi-Fi、蓝牙或热点中的至少一项");
+            return;
+        }
         if (!serversRunning) {
             startBtServer();
             startTcpServer();
             serversRunning = true;
         }
-        makeDiscoverable();
-        if (p2pMode) startHotspot(); else createGroup();
+        if (btOn) makeDiscoverable();
+        if (hotspotOn) {
+            startHotspot();
+        } else if (wifiOn) {
+            createGroup();
+        }
         recvBtn.setText("重新准备接收");
         status.setText("接收中：让对方在「发送」里选中本机");
         renderReceiveHint();
@@ -653,32 +987,35 @@ public class MainActivity extends Activity {
             status.setText("本机不支持 Wi-Fi 直连，将使用蓝牙接收");
             return;
         }
+        groupReady = false;
+        try {
+            wfd.removeGroup(wch, new WifiP2pManager.ActionListener() {
+                public void onSuccess() { createGroupNow(0); }
+                public void onFailure(int reason) { createGroupNow(0); }
+            });
+        } catch (Throwable t) {
+            status.setText("Wi-Fi 直连创建失败，将使用蓝牙接收");
+        }
+    }
+
+    void createGroupNow(final int attempt) {
         try {
             wfd.createGroup(wch, new WifiP2pManager.ActionListener() {
                 public void onSuccess() {
                     groupReady = true;
+                    askConnectionInfo();
                     ui.post(new Runnable() { public void run() {
                         status.setText("直连热点已建立" + (localIp.isEmpty() ? "，等待对方连接…" : " · 本机 " + localIp));
                     }});
                 }
                 public void onFailure(int reason) {
-                    try {
-                        wfd.removeGroup(wch, new WifiP2pManager.ActionListener() {
-                            public void onSuccess() {
-                                try {
-                                    wfd.createGroup(wch, new WifiP2pManager.ActionListener() {
-                                        public void onSuccess() { groupReady = true; }
-                                        public void onFailure(int r2) {
-                                            ui.post(new Runnable() { public void run() {
-                                                status.setText("Wi-Fi 直连不可用，对方可用蓝牙发送");
-                                            }});
-                                        }
-                                    });
-                                } catch (Throwable ignored) {}
-                            }
-                            public void onFailure(int r2) {}
-                        });
-                    } catch (Throwable ignored) {}
+                    if (attempt < 1) {
+                        ui.postDelayed(new Runnable() { public void run() { createGroupNow(attempt + 1); } }, 1500);
+                    } else {
+                        ui.post(new Runnable() { public void run() {
+                            status.setText("Wi-Fi 直连不可用（" + reason + "），对方可用蓝牙或热点发送");
+                        }});
+                    }
                 }
             });
         } catch (Throwable t) {
@@ -687,7 +1024,7 @@ public class MainActivity extends Activity {
     }
 
     void onP2pConnection(WifiP2pInfo info) {
-        if (info == null) return;
+        if (info == null) { askConnectionInfo(); return; }
         if (info.groupFormed && info.groupOwnerAddress != null) {
             localIp = info.groupOwnerAddress.getHostAddress();
             if (mode == 1) {
@@ -700,7 +1037,8 @@ public class MainActivity extends Activity {
     }
 
     void startTcpServer() {
-        if (tcpServer != null) return;
+        if (tcpRunning) return;
+        tcpRunning = true;
         pool.execute(new Runnable() {
             public void run() {
                 try {
@@ -713,6 +1051,8 @@ public class MainActivity extends Activity {
                     }
                 } catch (Throwable t) {
                     // 端口占用或已关闭
+                } finally {
+                    tcpRunning = false;
                 }
             }
         });
@@ -821,7 +1161,7 @@ public class MainActivity extends Activity {
         sendPending = true;
         sendToken++;
         final long tok = sendToken;
-        pendingName = name; pendingSize = size; pendingType = type; pendingText = text;
+        pendingName = name; pendingSize = size; pendingType = type; pendingText = text; pendingDev = dev;
         status.setText("正在连接 " + dev.name + "…");
         if (dev.kind == 0) {
             connectP2p(dev);
@@ -844,6 +1184,11 @@ public class MainActivity extends Activity {
     String pendingName = "";
     long pendingSize = 0;
     String pendingType = "file";
+    Dev pendingDev;
+    static final long MULTI_MIN = 4L * 1024 * 1024;
+
+    final Map<String, ChunkJob> chunkJobs = new HashMap<String, ChunkJob>();
+    final Object chunkLock = new Object();
     String pendingText = null;
 
     void connectP2p(final Dev dev) { connectP2p(dev, 0); }
@@ -851,18 +1196,36 @@ public class MainActivity extends Activity {
     void connectP2p(final Dev dev, final int attempt) {
         if (wfd == null || wch == null || dev.p2p == null) { sendPending = false; status.setText("Wi-Fi 直连不可用"); return; }
         try {
+            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wm != null && !wm.isWifiEnabled()) {
+                sendPending = false; setBusy(false);
+                status.setText("Wi-Fi 未开启：请打开 Wi-Fi，或改选蓝牙设备发送");
+                return;
+            }
+        } catch (Throwable ignored) {}
+        try {
             WifiP2pConfig cfg = new WifiP2pConfig();
             cfg.deviceAddress = dev.addr;
             cfg.groupOwnerIntent = 0;
             wfd.connect(wch, cfg, new WifiP2pManager.ActionListener() {
                 public void onSuccess() {
-                    // 连接回调可能早于 CONNECTION_CHANGED 广播，主动再查一次组信息
-                    ui.postDelayed(new Runnable() { public void run() { askConnectionInfo(); } }, 2500);
+                    // 部分 ROM 不发 CONNECTION_CHANGED，主动轮询组信息
+                    for (int i = 0; i < 3; i++) {
+                        ui.postDelayed(new Runnable() { public void run() {
+                            if (sendPending) askConnectionInfo();
+                        }}, 2200 + i * 2600);
+                    }
                 }
                 public void onFailure(int reason) {
                     if (attempt < 2 && sendPending) {
                         status.setText("直连正在重试（" + (attempt + 2) + "/3）…");
-                        ui.postDelayed(new Runnable() { public void run() { connectP2p(dev, attempt + 1); } }, 1800);
+                        try {
+                            wfd.removeGroup(wch, new WifiP2pManager.ActionListener() {
+                                public void onSuccess() {}
+                                public void onFailure(int r) {}
+                            });
+                        } catch (Throwable ignored) {}
+                        ui.postDelayed(new Runnable() { public void run() { connectP2p(dev, attempt + 1); } }, 2200);
                     } else {
                         sendPending = false;
                         ui.post(new Runnable() { public void run() {
@@ -898,7 +1261,124 @@ public class MainActivity extends Activity {
         } catch (Throwable ignored) {}
         if (!ips.contains("192.168.49.1")) ips.add("192.168.49.1");
         if (!ips.contains("192.168.49.2")) ips.add("192.168.49.2");
-        connectOverTcp(ips);
+        if (pendingSize >= MULTI_MIN && "file".equals(pendingType)) {
+            startChunkedIps(ips, pendingDev != null && pendingDev.bt != null && btOn && pendingSize >= 8L * 1024 * 1024);
+        } else {
+            connectOverTcp(ips);
+        }
+    }
+
+    int segmentsFor(long size, boolean allowBt) {
+        int n = 1;
+        if (size >= 4L * 1024 * 1024) n = 2;
+        if (size >= 16L * 1024 * 1024) n = 3;
+        if (size >= 64L * 1024 * 1024) n = 4;
+        if (allowBt && n > 1) n = Math.min(4, n + 1);
+        return n;
+    }
+
+    Socket tcpConnect(List<String> ips) throws Exception {
+        Exception last = null;
+        for (int i = 0; i < ips.size(); i++) {
+            try {
+                Socket s = new Socket();
+                s.connect(new InetSocketAddress(ips.get(i), PORT), 7000);
+                s.setSoTimeout(120000);
+                return s;
+            } catch (Exception e) { last = e; }
+        }
+        throw last == null ? new IOException("no route") : last;
+    }
+
+    Object btConnect(BluetoothDevice d) throws Exception {
+        BluetoothSocket s = d.createRfcommSocketToServiceRecord(APP_UUID);
+        try { s.connect(); }
+        catch (Throwable t) {
+            try { s.close(); } catch (Throwable ignored) {}
+            s = fallbackSocket(d);
+            s.connect();
+        }
+        return s;
+    }
+
+    void startChunkedIps(final List<String> ips, final boolean allowBt) {
+        final String name = pendingName, type = pendingType, text = pendingText;
+        final long size = pendingSize;
+        final Dev dev = pendingDev;
+        final int n = segmentsFor(size, allowBt);
+        final String id = System.currentTimeMillis() + "-" + sendToken;
+        final AtomicLong done = new AtomicLong(0);
+        final AtomicInteger remaining = new AtomicInteger(n);
+        final AtomicBoolean failed = new AtomicBoolean(false);
+        ui.post(new Runnable() { public void run() {
+            status.setText("多线路发送 · 自动分 " + n + " 段");
+        }});
+        for (int i = 0; i < n; i++) {
+            final int idx = i;
+            final long start = size * i / n;
+            final long len = size * (i + 1) / n - start;
+            final boolean viaBt = allowBt && i == n - 1 && n > 1 && dev != null && dev.bt != null;
+            pool.execute(new Runnable() {
+                public void run() {
+                    Object sock = null;
+                    try {
+                        sock = viaBt ? btConnect(dev.bt) : tcpConnect(ips);
+                        OutputStream out = outOf(sock);
+                        JSONObject h = new JSONObject();
+                        h.put("type", "chunk");
+                        h.put("id", id);
+                        h.put("name", name);
+                        h.put("size", size);
+                        h.put("start", start);
+                        h.put("len", len);
+                        h.put("index", idx);
+                        h.put("total", n);
+                        h.put("from", localNameStr());
+                        out.write((h.toString() + "\n").getBytes("UTF-8"));
+                        out.flush();
+                        InputStream fin = getContentResolver().openInputStream(sendUri);
+                        skipFully(fin, start);
+                        byte[] buf = new byte[8192];
+                        long sent = 0;
+                        while (sent < len) {
+                            int r = fin.read(buf, 0, (int) Math.min(buf.length, len - sent));
+                            if (r <= 0) break;
+                            out.write(buf, 0, r);
+                            sent += r;
+                            postProgress(done.addAndGet(r), size, true);
+                        }
+                        fin.close();
+                        out.flush();
+                        InputStream ackIn = new BufferedInputStream(inOf(sock));
+                        int ack = ackIn.read();
+                        if (ack != 'K') throw new IOException("chunk ack " + ack);
+                    } catch (Throwable t) {
+                        failed.set(true);
+                        final String msg = "分段 " + (idx + 1) + "/" + n + " 失败：" + t.getClass().getSimpleName();
+                        ui.post(new Runnable() { public void run() { status.setText(msg); }});
+                    } finally {
+                        close(sock);
+                        if (remaining.decrementAndGet() == 0) {
+                            ui.post(new Runnable() { public void run() {
+                                setBusy(false);
+                                progressRowSet(false);
+                                if (failed.get()) status.setText("多线路发送未完成，可重试或改选热点/蓝牙");
+                                else status.setText("发送完成 · " + human(size) + " · " + n + " 段并行");
+                            }});
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    static void skipFully(InputStream in, long n) throws IOException {
+        while (n > 0) {
+            long s = in.skip(n);
+            if (s > 0) { n -= s; continue; }
+            if (in.read() < 0) throw new IOException("eof");
+            n--;
+        }
     }
 
     void connectOverTcp(final List<String> ips) {
@@ -993,7 +1473,11 @@ public class MainActivity extends Activity {
                             List<String> ips = new ArrayList<String>();
                             ips.add(gw);
                             if (!ips.contains("192.168.43.1")) ips.add("192.168.43.1");
-                            connectOverTcp(ips);
+                            if (pendingSize >= MULTI_MIN && "file".equals(pendingType)) {
+                                startChunkedIps(ips, pendingDev != null && pendingDev.bt != null && btOn && pendingSize >= 8L * 1024 * 1024);
+                            } else {
+                                connectOverTcp(ips);
+                            }
                         }}, 1200);
                     }
                     public void onUnavailable() {
@@ -1023,7 +1507,11 @@ public class MainActivity extends Activity {
             ui.postDelayed(new Runnable() { public void run() {
                 List<String> ips = new ArrayList<String>();
                 ips.add("192.168.43.1");
-                connectOverTcp(ips);
+                if (pendingSize >= MULTI_MIN && "file".equals(pendingType)) {
+                    startChunkedIps(ips, pendingDev != null && pendingDev.bt != null && btOn && pendingSize >= 8L * 1024 * 1024);
+                } else {
+                    connectOverTcp(ips);
+                }
             }}, 4500);
         } catch (Throwable t) {
             setBusy(false);
@@ -1142,6 +1630,10 @@ public class MainActivity extends Activity {
                 netOut.flush();
                 return;
             }
+            if ("chunk".equals(type)) {
+                handleChunk(s, in, h);
+                return;
+            }
             if ("text".equals(type)) {
                 ui.post(new Runnable() { public void run() { addMessage(from, text, via); }});
                 return;
@@ -1187,6 +1679,113 @@ public class MainActivity extends Activity {
         } finally {
             try { if (in != null) in.close(); } catch (Throwable ignored) {}
             close(s);
+        }
+    }
+
+    void handleChunk(Object s, InputStream in, JSONObject h) throws Exception {
+        String id = h.optString("id", "");
+        String name = h.optString("name", "文件");
+        long size = h.optLong("size", 0);
+        long start = h.optLong("start", 0);
+        long len = h.optLong("len", 0);
+        int index = h.optInt("index", 0);
+        int total = Math.max(1, h.optInt("total", 1));
+        String from = h.optString("from", "对方");
+        ChunkJob job;
+        synchronized (chunkLock) {
+            job = chunkJobs.get(id);
+            if (job == null) {
+                File dir = new File(getCacheDir(), "chunks");
+                if (!dir.exists()) dir.mkdirs();
+                File tmp = new File(dir, "part-" + Math.abs(id.hashCode()) + ".tmp");
+                RandomAccessFile raf = new RandomAccessFile(tmp, "rw");
+                if (size > 0) raf.setLength(size);
+                job = new ChunkJob(id, name, size, total, from, tmp, raf);
+                chunkJobs.put(id, job);
+            }
+        }
+        boolean ok = true;
+        long written = 0;
+        byte[] buf = new byte[8192];
+        while (written < len) {
+            int r = in.read(buf, 0, (int) Math.min(buf.length, len - written));
+            if (r <= 0) break;
+            synchronized (job) {
+                job.raf.seek(start + written);
+                job.raf.write(buf, 0, r);
+            }
+            written += r;
+            postProgress(job.received + written, size, false);
+        }
+        if (written < len) ok = false;
+        boolean complete = false;
+        synchronized (job) {
+            if (ok) {
+                if (job.got.add(index)) job.received += len;
+                if (job.got.size() >= job.total) {
+                    job.finalizing = true;
+                    complete = true;
+                }
+            }
+        }
+        try {
+            OutputStream ack = outOf(s);
+            ack.write(ok ? 'K' : 'E');
+            ack.flush();
+        } catch (Throwable ignored) {}
+        if (complete) {
+            synchronized (chunkLock) { chunkJobs.remove(id); }
+            finalizeChunk(job);
+        }
+    }
+
+    void finalizeChunk(ChunkJob job) {
+        Sink sink = openSink(job.name);
+        if (sink == null) {
+            ui.post(new Runnable() { public void run() { status.setText("无法写入下载目录"); }});
+            job.drop();
+            return;
+        }
+        try {
+            FileInputStream fis = new FileInputStream(job.temp);
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = fis.read(buf)) > 0) sink.os.write(buf, 0, n);
+            fis.close();
+            sink.os.flush();
+            sink.os.close();
+            job.drop();
+            final String label = sink.label;
+            final Uri uri = sink.uri;
+            final File file = sink.file;
+            ui.post(new Runnable() { public void run() {
+                status.setText("接收完成 · " + job.name + "（多线路）");
+                addReceived(job.from, job.name, job.size, label, "多线路", uri, file);
+                progressRowSet(false);
+            }});
+        } catch (Throwable t) {
+            sink.discard();
+            job.drop();
+            ui.post(new Runnable() { public void run() { status.setText("合并分块失败：" + t.getClass().getSimpleName()); }});
+        }
+    }
+
+    static class ChunkJob {
+        final String id, name, from;
+        final long size;
+        final int total;
+        final File temp;
+        final RandomAccessFile raf;
+        final Set<Integer> got = new HashSet<Integer>();
+        long received = 0;
+        boolean finalizing = false;
+        ChunkJob(String id, String name, long size, int total, String from, File temp, RandomAccessFile raf) {
+            this.id = id; this.name = name; this.size = size; this.total = total;
+            this.from = from; this.temp = temp; this.raf = raf;
+        }
+        void drop() {
+            try { raf.close(); } catch (Throwable ignored) {}
+            try { temp.delete(); } catch (Throwable ignored) {}
         }
     }
 
@@ -1354,7 +1953,10 @@ public class MainActivity extends Activity {
         col.setOrientation(LinearLayout.VERTICAL);
         col.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         TextView n = text(d.name, 15, cText, true);
-        TextView s = text((d.kind == 0 ? "Wi-Fi 直连" : "蓝牙") + (d.addr == null || d.addr.isEmpty() ? "" : " · " + d.addr), 11, cSub, false);
+        String line = (d.kind == 0 ? "Wi-Fi 直连" : "蓝牙");
+        if (d.kind == 0 && d.bt != null) line += " + 蓝牙并行";
+        if (d.addr != null && !d.addr.isEmpty()) line += " · " + d.addr;
+        TextView s = text(line, 11, cSub, false);
         s.setPadding(0, dp(3), 0, 0);
         col.addView(n);
         col.addView(s);
@@ -1489,6 +2091,10 @@ public class MainActivity extends Activity {
         try { if (tcpServer != null) tcpServer.close(); } catch (Throwable ignored) {}
         try { if (bt != null) bt.cancelDiscovery(); } catch (Throwable ignored) {}
         try { if (wfd != null && wch != null) wfd.removeGroup(wch, null); } catch (Throwable ignored) {}
+        synchronized (chunkLock) {
+            for (ChunkJob j : chunkJobs.values()) j.drop();
+            chunkJobs.clear();
+        }
         pool.shutdownNow();
     }
 }

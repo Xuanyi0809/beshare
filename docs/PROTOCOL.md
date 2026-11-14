@@ -2,7 +2,7 @@
 
 本文描述「快传」两端之间的发现、建链与数据传输规则。协议面向**本地直连**，无中转、无鉴权服务器；同一份协议同时用于 Wi-Fi Direct（TCP）与蓝牙 RFCOMM 两条承载通道。
 
-- 版本：v1（随 App 1.0 / 1.1 发布）
+- 版本：v2（随 App 1.5 发布，新增分块与多线路；v1 单流仍兼容）
 - 字节序：大端（网络序），仅用于整数；本项目实际字段均为文本
 - 字符集：UTF-8
 - 默认端口：`8988/TCP`
@@ -98,13 +98,52 @@ UI 将两路结果合并为统一列表，按 `(kind, address)` 去重，同一�
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `type` | string | 是 | `file` 或 `text` |
+| `type` | string | 是 | `file` / `text` / `chunk` / `handshake` |
 | `name` | string | 是 | 文件名；`text` 时为展示名（固定 `文本消息`） |
 | `size` | number | 是 | 二进制体字节数；`text` 时为 `0` |
 | `text` | string | 否 | `type=text` 时的正文；`file` 时为空串 |
 | `from` | string | 否 | 发送端蓝牙名或 `Build.MODEL`，仅用于展示 |
 
 未知字段必须忽略；未知 `type` 按 `file` 处理（向前兼容策略）。
+
+### 4.4 分块帧（v2，type=chunk）
+
+大文件（≥4 MB）由发送端切成 `total` 块，可经多条 TCP 连接或“TCP + 蓝牙”同时发送。每块独立建链，头部如下：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | string | 本次传输唯一 ID，同一文件的所有分块相同 |
+| `name` | string | 原文件名 |
+| `size` | number | 整个文件字节数 |
+| `start` | number | 本块在文件中的起始偏移 |
+| `len` | number | 本块字节数 |
+| `index` | number | 块序号，0 起 |
+| `total` | number | 总块数 |
+| `from` | string | 发送端展示名 |
+
+示例：
+
+```json
+{"type":"chunk","id":"1794633535000-3","name":"video.mp4","size":104857600,"start":0,"len":26214400,"index":0,"total":4,"from":"Mate 50"}
+```
+
+紧随 `len` 字节数据；接收端按 `start` 随机写入缓存文件，收齐 `total` 块后合并落盘。
+
+### 4.5 握手帧（P2P 模式）
+
+蓝牙通道先发：
+
+```json
+{"type":"handshake","from":"Mate 50"}
+```
+
+接收端回：
+
+```json
+{"type":"net","mode":"hotspot","ssid":"快传_xxxx","pass":"********"}
+```
+
+`mode=hotspot` 时发送端用 `WifiNetworkSpecifier` 加入热点；热点未就绪时回 `mode=wfd`，发送端退回蓝牙直传。
 
 ### 4.3 示例
 
@@ -134,7 +173,14 @@ UI 将两路结果合并为统一列表，按 `(kind, address)` 去重，同一�
 2. `type=file`：从 SAF `content://` 打开 `InputStream`，8 KiB 分块写入 socket，按已发送字节更新进度。
 3. 关闭输出流；不等待应用层 ACK，以“写完全部字节”为完成。
 
-### 5.2 接收端
+### 5.2 接收端（v2 分块）
+
+- 收到 `type=chunk`：按 `id` 建 `RandomAccessFile` 缓存（`cacheDir/chunks/part-*.tmp`），`seek(start)` 写入 `len` 字节；记录已完成 `index`。
+- 每块写完回单字节 `K`，失败回 `E`。
+- 收齐 `total` 块：复制缓存到 `Download/快传`（同名去重），删除临时文件，写入接收卡片。
+- 任一块缺失则文件不落盘；发送端 UI 报“多线路发送未完成”。
+
+### 5.3 接收端（v1 单流）
 
 1. 读头 → 解析。
 2. `type=text`：直接入列表，可复制，不落盘。
@@ -146,7 +192,7 @@ UI 将两路结果合并为统一列表，按 `(kind, address)` 去重，同一�
 4. 完整性判定：`size > 0 && received < size` 视为中断，删除半成品（MediaStore 条目或本地文件）；否则视为完成。
 5. 不校验哈希；协议的完整性依赖 TCP/RFCOMM 的链路校验与字节计数。
 
-### 5.3 超时与取消
+### 5.4 超时与取消
 
 | 环节 | 超时 |
 |---|---|
@@ -176,4 +222,4 @@ UI 将两路结果合并为统一列表，按 `(kind, address)` 去重，同一�
 - **HarmonyOS / 定制 ROM**：可能限制 `createGroup()` 或后台 Wi-Fi，P2P 建组失败时协议整体退回 RFCOMM，语义不变。
 - **蓝牙吞吐**：经典蓝牙实际约 100–300 KB/s，适合小文件兜底；大文件优先 P2P。
 - **IPv6**：v1 仅使用 IPv4 的 `groupOwnerAddress`。
-- **多连接**：实现上 accept 循环可为多个连接各起线程，但产品设计面向单发送端；并发写入时各自独立落盘。
+- **多连接**：accept 循环为每个连接起线程；v2 分块传输时同一文件由多连接并发写入同一缓存文件的不同偏移，收齐后合并落盘。
