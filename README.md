@@ -124,7 +124,7 @@ App 不申请通讯录、短信、相机、后台定位，也不含任何统计 
 
 ## 下载与安装
 
-- 从 [Releases](../../releases) 下载 `快传-x.x.apk`，或直接安装仓库提供的构建产物
+- 从 [Releases](../../releases) 下载 `beshare-x.x.apk`，或直接安装仓库提供的构建产物
 - 需要 Android 6.0（API 23）及以上；已在华为 Mate 50（HarmonyOS 4.0）上适配蓝牙兜底路径
 - 两端使用同一签名即可覆盖升级
 
