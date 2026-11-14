@@ -1,5 +1,12 @@
 # 更新日志
 
+## 1.2
+
+- 包名由 `com.rth1.beshare` 改为 `com.circlehub.beshare`，品牌统一到 CircleHub
+- 顶部新增「官网 · 更新」按钮，点击直接打开 https://beshare.rth1.xyz
+- 官网迁移到 `beshare.rth1.xyz`，下载页同步改成三个入口
+- 由于应用标识变化，1.1 无法覆盖安装 1.2，需先卸载旧版
+
 ## 1.1
 
 - 修复发送/接收标签在非选中态丢失描边的问题

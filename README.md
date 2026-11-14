@@ -6,9 +6,10 @@
 
 无服务器 · 无网页 · 无账号 · 无广告 · 纯本地直连
 
-[官网下载页](https://circlehub.rth1.xyz/beshare.html) · [GitHub Releases](https://github.com/Xuanyi0809/beshare/releases)
+[官网下载页](https://beshare.rth1.xyz) · [GitHub Releases](https://github.com/Xuanyi0809/beshare/releases)
 
 ![platform](https://img.shields.io/badge/Platform-Android%206.0%2B-3DDC84?logo=android&logoColor=white)
+![version](https://img.shields.io/badge/Version-1.2-4F7CFF)
 ![size](https://img.shields.io/badge/APK-33%20KB-4F7CFF)
 ![license](https://img.shields.io/badge/License-MIT-blue)
 ![org](https://img.shields.io/badge/Org-CircleHub-4F7CFF)
@@ -126,7 +127,8 @@ App 不申请通讯录、短信、相机、后台定位，也不含任何统计 
 
 ## 下载与安装
 
-- 从 [Releases](../../releases) 下载 `beshare-x.x.apk`，或直接安装仓库提供的构建产物
+- 从 [Releases](../../releases) 下载 `beshare-x.x.apk`，或直接装官网 [beshare.rth1.xyz](https://beshare.rth1.xyz)
+- 1.2 起包名为 `com.circlehub.beshare`，与 1.1 不是同一个应用标识，升级前请先卸载旧版
 - 需要 Android 6.0（API 23）及以上；已在华为 Mate 50（HarmonyOS 4.0）上适配蓝牙兜底路径
 - 两端使用同一签名即可覆盖升级
 
@@ -169,7 +171,7 @@ beshare/
 ├── res/
 │   ├── drawable/ic_launcher.xml
 │   └── values/strings.xml
-└── src/com/rth1/beshare/MainActivity.java   # 全部逻辑与 MD3 UI
+└── src/com/circlehub/beshare/MainActivity.java   # 全部逻辑与 MD3 UI
 ```
 
 ## 兼容性与已知限制
