@@ -376,37 +376,41 @@ public class MainActivity extends Activity {
         pool.execute(new Runnable() {
             public void run() {
                 Throwable last = null;
+                int bestCode = 0;
+                String bestName = "";
+                String bestApk = "";
+                String bestNotes = "";
                 String[] urls = new String[]{
                         "https://beshare.rth1.xyz/version.json?t=" + System.currentTimeMillis(),
-                        "https://testingcf.jsdelivr.net/gh/Xuanyi0809/beshare@main/version.json?t=" + System.currentTimeMillis(),
                         "https://cdn.jsdelivr.net/gh/Xuanyi0809/beshare@main/version.json?t=" + System.currentTimeMillis(),
+                        "https://fastly.jsdelivr.net/gh/Xuanyi0809/beshare@main/version.json?t=" + System.currentTimeMillis(),
                         "https://raw.githubusercontent.com/Xuanyi0809/beshare/main/version.json?t=" + System.currentTimeMillis()
                 };
                 for (int i = 0; i < urls.length; i++) {
                     try {
                         String body = fetchText(urls[i]);
                         JSONObject j = new JSONObject(body);
-                        final int code = j.optInt("versionCode", 0);
-                        final String vn = j.optString("versionName", "");
-                        final String apk = j.optString("url", "https://beshare.rth1.xyz");
-                        final String notes = j.optString("notes", "");
-                        final int now = currentVersionCode();
-                        updateChecking = false;
-                        if (code > now) {
-                            ui.post(new Runnable() { public void run() { showUpdateDialog(vn, apk, notes); }});
-                        } else if (manual) {
-                            ui.post(new Runnable() { public void run() {
-                                Toast.makeText(MainActivity.this, "已是最新版本 v" + currentVersionName(), Toast.LENGTH_SHORT).show();
-                            }});
+                        int code = j.optInt("versionCode", 0);
+                        if (code > bestCode) {
+                            bestCode = code;
+                            bestName = j.optString("versionName", "");
+                            bestApk = j.optString("url", "https://beshare.rth1.xyz");
+                            bestNotes = j.optString("notes", "");
                         }
-                        return;
                     } catch (Throwable t) { last = t; }
                 }
                 updateChecking = false;
-                if (manual) {
-                    final String m = last == null ? "未知错误" : last.getClass().getSimpleName();
+                final int code = bestCode;
+                final String vn = bestName;
+                final String apk = bestApk;
+                final String notes = bestNotes;
+                final int now = currentVersionCode();
+                final String err = last == null ? "未知错误" : last.getClass().getSimpleName();
+                if (code > now) {
+                    ui.post(new Runnable() { public void run() { showUpdateDialog(vn, apk, notes); }});
+                } else if (manual) {
                     ui.post(new Runnable() { public void run() {
-                        Toast.makeText(MainActivity.this, "检查更新失败：" + m, Toast.LENGTH_SHORT).show();
+                        Toast.makeText(MainActivity.this, code > 0 ? "已是最新版本 v" + currentVersionName() : "检查更新失败：" + err, Toast.LENGTH_SHORT).show();
                     }});
                 }
             }
